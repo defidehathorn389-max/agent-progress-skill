@@ -2,7 +2,7 @@
 
 让接手模型读取文件而不是猜测上一段聊天。按方向/项目隔离，带历史检查点、证据、纠错记录、下一步和同步边界。
 
-入口：[SKILL.md](SKILL.md)。无平台专属依赖；本地进度工具只用Python标准库。
+入口：[SKILL.md](SKILL.md)。最新授权/自动同步规则：[SESSION_POLICY.md](SESSION_POLICY.md)。无平台专属依赖；本地进度工具只用Python标准库。
 
 ## 交给下一模型的话
 
@@ -38,3 +38,21 @@ python scripts/export_handoff.py --workspace /path/to/workspace \
 ```
 
 只能显式选择需要的规则、进度和文本证据。工具排除凭据目录、密文、常见秘密文件、Git内部文件和大媒体，并生成包内SHA256清单。包里有真实项目进度时必须私有保存。扫描器不是完整的隐私检查。
+
+## 远程入口
+
+公开规则：https://github.com/defidehathorn389-max/session-handoff-skill
+
+私有进度：https://github.com/defidehathorn389-max/agent-progress
+
+仓库的实际部署/核验状态以私有进度的LOCATION.json与sync/latest.json为准。用户在当前启动消息已提供口令时不再询问；每次实质性回复结束前自动保存有变化的进度并推送核验。
+
+## 一次会话授权与自动推送工具
+
+- `SESSION_POLICY.md`：当前会话已经提供口令就不再问；每次有实质性变化的回复结束前自动保存/推送。
+- `REMOTE_START.md`：远程可复制模板，只保留占位符，不含真实口令或密文。
+- `scripts/credential_vault.py`：AES-GCM+scrypt密文解密，禁止回显明文token。
+- `scripts/session_github.py`：内存内复用当前会话认证，受限socket向Git内部管道提供凭据；关闭时清理。
+- `scripts/sync_progress.py`：私有进度发布、独立克隆哈希校验和不自引用的检查点同步回执；不自行询问密码。
+
+本地检查点工具仍仅依赖Python标准库。联网认证工具需要`requests cryptography`；只有明确的当前会话授权后才调用。
