@@ -1,0 +1,22 @@
+{
+  "title": "替换为项目标题",
+  "status": "IN_PROGRESS",
+  "goal": "填写用户目标",
+  "constraints": [],
+  "completed": [],
+  "pending": [],
+  "decisions": [],
+  "artifacts": [],
+  "evidence": [],
+  "risks": [],
+  "next_actions": [],
+  "avoid": [],
+  "sync": {
+    "memory": "LOCAL_ONLY"
+  },
+  "handoff": {
+    "first_action": "读取当前项目检查点并核对证据",
+    "running_operations": []
+  },
+  "related_projects": []
+}

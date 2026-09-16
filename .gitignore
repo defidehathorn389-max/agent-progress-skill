@@ -1,0 +1,7 @@
+__pycache__/
+.cache/
+*.pyc
+/handoff/
+/credentials/
+*.enc.json
+*.zip
