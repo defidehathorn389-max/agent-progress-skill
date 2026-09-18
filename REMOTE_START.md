@@ -3,7 +3,7 @@
 把下列模板作为新会话的用户消息。口令与密文封装只在发送给受信任模型的私有消息中填写，不保存到Skill或进度库。
 
 ```
-请从 https://github.com/defidehathorn389-max/session-handoff-skill 读取SKILL.md和SESSION_POLICY.md。
+请从 https://github.com/defidehathorn389-max/agent-progress-skill 读取SKILL.md和SESSION_POLICY.md。
 本会话授权你读取 https://github.com/defidehathorn389-max/agent-progress 中的私有进度；按我的任务分别记录项目，并在每次实质性回复结束前自动提交、推送、核验实际变化，不重复询问是否保存/推送。
 
 当前会话一次有效口令即可；如果我已在本消息提供，不要再次询问。不要将口令、明文token或本条敏感启动消息写入文件、进度、日志或仓库。不跨会话继承授权。扩权、删除、强推、改可见性等另行确认操作。

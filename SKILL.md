@@ -1,9 +1,9 @@
 ---
-name: session-handoff
+name: agent-progress
 description: 按方向与项目保存可追溯进度，供不同模型或会话接续；包含读取门禁、检查点、冲突控制、隐私与同步验收。
 ---
 
-# 跨模型项目交接 Skill
+# Agent Progress · 统一项目进度管理 Skill
 
 > 最新会话规则见[SESSION_POLICY.md](SESSION_POLICY.md)：本会话一次有效口令，常规进度同步不反复请示。
 
@@ -13,7 +13,15 @@ description: 按方向与项目保存可追溯进度，供不同模型或会话�
 
 **记忆来自可访问、已持久化的文件，不来自模型声称“记住了”。** 本Skill不能直接读取平台未提供的另一个聊天，也不能强制所有模型遵守。缺少文件、工具、权限或网络时，说明缺口，要求用户提供交接包或访问方式，不编造历史。
 
-默认进度根目录：`/home/user/handoff`。可用`--root`指定其他位置。通用规则与模板可以公开；实际项目进度默认私有，必须与规则分开保存。原图、视频、音轨等大文件留在其项目仓库，交接库只记路径、版本、指纹及恢复方式。
+默认进度根目录：`/home/user/agent-progress`。可用`--root`指定其他位置。通用规则与模板可以公开；实际项目进度默认私有，必须与规则分开保存。原图、视频、音轨等大文件留在其项目仓库，交接库只记路径、版本、指纹及恢复方式。
+
+## 唯一进度来源
+
+- 默认唯一私有进度仓库为agent-progress。新项目在其中新增 `projects/<domain>/<id>/`，不得再创建项目专属handoff仓库或平行HANDOFF.md。
+- `HEAD.json`是权威指针，`CURRENT.md`是派生阅读视图，二者不是两份可独立编辑的进度。历史在不可变checkpoints，不能另写一份“最新状态”。
+- 业务Skill只引用本Skill的读写协议，不复制一套交接机制。通用规则留公开Skill，实际进度只在私有agent-progress，大媒体留素材库。
+- 默认不要把秘密相关等无关项目读作当前业务上下文。保留其他项目远端条目，局部工作区不能覆盖整个INDEX或镜像删除未下载项目。
+- 仅在用户明确授权隔离进度库时例外；先记录理由与单一权威入口。
 
 ## 1. 接手前：读取门禁
 
@@ -74,8 +82,8 @@ handoff/
 用新状态文件提交，不手工覆盖历史：
 
 ```bash
-python scripts/handoff.py --root /home/user/handoff read --project video-production/example
-python scripts/handoff.py --root /home/user/handoff checkpoint \
+python scripts/handoff.py --root /home/user/agent-progress read --project video-production/example
+python scripts/handoff.py --root /home/user/agent-progress checkpoint \
   --project video-production/example --expected <刚读到的HEAD_ID> \
   --state /path/to/new-state.json --note '本次实际变化及证据'
 ```
@@ -119,10 +127,10 @@ python scripts/handoff.py --root /home/user/handoff checkpoint \
 ## 8. 快速恢复与验收
 
 ```bash
-python scripts/handoff.py --root /home/user/handoff list
-python scripts/handoff.py --root /home/user/handoff read --project <方向>/<项目ID>
-python scripts/handoff.py --root /home/user/handoff validate --verify-local --workspace /home/user
-python scripts/handoff.py --root /home/user/handoff rebuild
+python scripts/handoff.py --root /home/user/agent-progress list
+python scripts/handoff.py --root /home/user/agent-progress read --project <方向>/<项目ID>
+python scripts/handoff.py --root /home/user/agent-progress validate --verify-local --workspace /home/user
+python scripts/handoff.py --root /home/user/agent-progress rebuild
 python -m unittest discover -s tests -v
 ```
 

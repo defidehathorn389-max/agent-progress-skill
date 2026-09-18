@@ -1,4 +1,4 @@
-# 跨模型项目交接 Skill
+# Agent Progress · 唯一进度管理入口
 
 让接手模型读取文件而不是猜测上一段聊天。按方向/项目隔离，带历史检查点、证据、纠错记录、下一步和同步边界。
 
@@ -33,7 +33,7 @@ python -m unittest discover -s tests -v
 
 ```bash
 python scripts/export_handoff.py --workspace /path/to/workspace \
-  --include skills/session-handoff-skill --include handoff \
+  --include skills/agent-progress-skill --include handoff \
   --output /path/to/private-handoff.zip
 ```
 
@@ -41,7 +41,7 @@ python scripts/export_handoff.py --workspace /path/to/workspace \
 
 ## 远程入口
 
-公开规则：https://github.com/defidehathorn389-max/session-handoff-skill
+公开规则：https://github.com/defidehathorn389-max/agent-progress-skill
 
 私有进度：https://github.com/defidehathorn389-max/agent-progress
 
@@ -56,3 +56,7 @@ python scripts/export_handoff.py --workspace /path/to/workspace \
 - `scripts/sync_progress.py`：私有进度发布、独立克隆哈希校验和不自引用的检查点同步回执；不自行询问密码。
 
 本地检查点工具仍仅依赖Python标准库。联网认证工具需要`requests cryptography`；只有明确的当前会话授权后才调用。
+
+## 不再建立平行交接
+
+所有实际项目进入私有agent-progress的projects目录。业务Skill仅引用本工具。HEAD是权威指针，CURRENT是派生视图，不另建项目专属handoff库。若平台支持安装Skill，可将本Skill注册为agent-progress；GitHub仓库地址本身不自动提供斜杠命令。

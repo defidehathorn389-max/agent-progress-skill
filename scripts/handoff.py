@@ -199,7 +199,7 @@ def validate(root,project=None,workspace=None):
  return out
 
 def main():
- ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--root',type=Path,default=Path('/home/user/handoff'));sub=ap.add_subparsers(dest='command',required=True)
+ ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--root',type=Path,default=Path('/home/user/agent-progress'));sub=ap.add_subparsers(dest='command',required=True)
  sub.add_parser('list');sub.add_parser('rebuild')
  r=sub.add_parser('read');r.add_argument('--project',required=True)
  c=sub.add_parser('checkpoint');c.add_argument('--project',required=True);c.add_argument('--expected',required=True);c.add_argument('--state',type=Path,required=True);c.add_argument('--note',required=True);c.add_argument('--merge-parent')
