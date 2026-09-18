@@ -14,6 +14,7 @@ def publish(root,session,repository,verification_dir):
  root=Path(root);dest=Path(verification_dir)
  if dest.exists():raise RuntimeError('Verification directory must be new')
  check=handoff.validate(root)
+ if check.get('unloaded_projects'):raise RuntimeError('Partial progress checkout: full-tree sync refused; use a scoped update that preserves remote-only files')
  if not check['index_current'] or any(x['warnings'] for x in check['projects']):raise RuntimeError('Resolve local checkpoint/view warnings first')
  info=session.require_repo(repository,private=True);branch=info.get('default_branch') or 'main';url='https://github.com/'+repository+'.git'
  ref=session.api('GET','repos/'+repository+'/git/ref/heads/'+branch)

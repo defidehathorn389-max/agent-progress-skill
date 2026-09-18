@@ -135,14 +135,28 @@ def current_bytes(cp):
 def all_projects(root):
  return sorted(p.parent for p in (Path(root)/'projects').glob('*/*/HEAD.json'))
 
+def retained_index_rows(root):
+ rows={};path=Path(root)/'INDEX.md'
+ if path.exists():
+  for line in path.read_text().splitlines():
+   match=re.match(r'^- .* — `([a-z0-9-]+/[a-z0-9-]+)` — ',line)
+   if match:rows[match.group(1)]=line
+ return rows
+
 def index_bytes(root):
- lines=['# 跨模型进度索引','','先读GLOBAL.md与LOCATION.json；只读取相关方向。CURRENT.md是导航视图，以校验后的HEAD检查点为准。','', '实际项目进度默认私有。各项目中的历史素材同步，不等于本进度库已同步。','']
- domain=None
+ # Keep remote-only navigation entries in a deliberately partial workspace.
+ # They are not validated project states; read their HEAD before acting.
+ rows=retained_index_rows(root)
  for p in all_projects(root):
-  h,cp=checked_head(p)
-  if p.parent.name!=domain:domain=p.parent.name;lines+=['## '+domain,'']
+  h,cp=checked_head(p);ident=p.parent.name+'/'+p.name
   link=p.relative_to(Path(root)).as_posix()+'/CURRENT.md'
-  title=cp['state']['title'];lines+=[f"- [{title}]({link}) — `{domain}/{p.name}` — **{cp['state']['status']}** — `{h['checkpoint_id']}`"]
+  rows[ident]=f"- [{cp['state']['title']}]({link}) — `{ident}` — **{cp['state']['status']}** — `{h['checkpoint_id']}`"
+ lines=['# 跨模型进度索引','','先读GLOBAL.md与LOCATION.json；只读取相关方向。CURRENT.md是导航视图，以校验后的HEAD检查点为准。','','实际项目进度默认私有。各项目中的历史素材同步，不等于本进度库已同步。','']
+ domain=None
+ for ident,line in sorted(rows.items()):
+  current=ident.split('/')[0]
+  if current!=domain:domain=current;lines+=['## '+domain,'']
+  lines.append(line)
  return ('\n'.join(lines)+'\n').encode()
 
 def rebuild(root):
@@ -195,6 +209,7 @@ def validate(root,project=None,workspace=None):
     if not f.is_file() or digest(f.read_bytes())!=a['sha256']:raise HandoffError('Missing/changed local artifact: '+a['id']+' in '+cp['domain']+'/'+cp['project'])
     verified.append(a['id'])
   out['projects'].append({'project':cp['domain']+'/'+cp['project'],'head':h,'checkpoints_checked':len(seen),'local_artifacts_verified':verified,'warnings':warnings})
+ out['unloaded_projects']=sorted(set(retained_index_rows(root))-{p.parent.name+'/'+p.name for p in all_projects(root)})
  out['index_current']=(Path(root)/'INDEX.md').exists() and (Path(root)/'INDEX.md').read_bytes()==index_bytes(root)
  return out
 
