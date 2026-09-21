@@ -147,3 +147,5 @@ python -m unittest discover -s tests -v
 校验散列成功只证明内容完整，不证明状态字段互相一致。接手和追加检查点时，交叉核对 title、goal、pending、next_actions、handoff.first_action/current_request_type 与最新有来源的 decisions、catalog。旧任务完成后不得沿用其“启动中”、未确认选择、会话工作路径或旧语音ID作为当前执行入口。冲突须记录证据并在新检查点纠正；证据不足才向用户确认，不能凭旧摘要重做已完成工作。保持历史不可变，CURRENT/INDEX由新HEAD派生。
 
 同步更新远端引用后，若立即回读不一致，先保留“不确定”状态，不盲目重推或强推。重新读取远端引用（必要时绕过缓存），核查其父提交与预期基线，并按不可变提交重新下载目标文件校验指纹。只有确认提交与内容一致才记已同步；若确为他人并发写入则读取合并，不将缓存/传播延迟猜测当作确定根因。
+
+GitHub Contents API对较大文件可能不返回内容体。远端核验以immutable commit的git tree取得blob sha，再用`/git/blobs/{sha}`读回计算散列；不要把空内容误认为同步丢失，也不要在未核父提交前重推。
