@@ -151,3 +151,7 @@ python -m unittest discover -s tests -v
 GitHub Contents API对较大文件可能不返回内容体。远端核验以immutable commit的git tree取得blob sha，再用`/git/blobs/{sha}`读回计算散列；不要把空内容误认为同步丢失，也不要在未核父提交前重推。
 
 跨库同步时expected必须取目标库自己的HEAD；曾误用另一库HEAD触发并发断言。断言失败先核目标库ref与父提交，再区分“真并发”与“传错expected”。
+
+## 检查点容量与批次失败即停
+- 当前state序列化上限64KiB。接近上限时，将完整展开状态放入私有进度库归档并先回读核验，再将当前state收敛为活动目标、约束、决定、待办和必要证据索引；归档保留不可变提交、路径与SHA256。不得删除历史检查点或通过丢弃历史代替归档。
+- 多命令批次使用失败即停（如 `set -euo pipefail`），并检查checkpoint命令返回值及新HEAD/revision。检查点失败时，不得继续拿旧HEAD生成“本轮新状态已完成”的回执；已经上传的其他文件须准确限定回执范围，纠正后再创建并核验真正的新检查点。
