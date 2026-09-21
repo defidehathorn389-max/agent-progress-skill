@@ -141,3 +141,7 @@ python -m unittest discover -s tests -v
 工具`export_handoff.py`按显式路径生成文本交接包及包内校验清单，排除凭据目录、密文、大媒体和Git内部文件。解压到独立目录后，先运行`validate`并逐项目`read`，核对检查点与预期版本。不要对未恢复媒体的新目录立即宣称`--verify-local`通过。最终包指纹记录在包外回执，避免自引用。
 
 安全解压前检查归档路径不得是绝对路径、含`..`或越界符号链接；不要覆盖已有较新项目。若已有进度，比较检查点并合并，而不是直接解压覆盖。
+
+## 检查点内部语义一致性门禁
+
+校验散列成功只证明内容完整，不证明状态字段互相一致。接手和追加检查点时，交叉核对 title、goal、pending、next_actions、handoff.first_action/current_request_type 与最新有来源的 decisions、catalog。旧任务完成后不得沿用其“启动中”、未确认选择、会话工作路径或旧语音ID作为当前执行入口。冲突须记录证据并在新检查点纠正；证据不足才向用户确认，不能凭旧摘要重做已完成工作。保持历史不可变，CURRENT/INDEX由新HEAD派生。
