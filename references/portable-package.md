@@ -8,7 +8,7 @@ python3 scripts/export_handoff.py --workspace /home/user \
   --output /home/user/private-handoff.zip
 ```
 
-- 只打包显式选择的规则、进度和文本证据。会排除凭据目录、密文、常见秘密文件、Git 内部文件、锁/临时文件和大媒体，并在包内生成 `PACKAGE_MANIFEST.json`（逐文件 SHA256）。
+- 只打包显式选择的规则、进度和文本证据。会排除凭据目录（包括 `.secrets/`）、密文、常见秘密文件、Git 内部文件、锁/临时文件和大媒体；超过 2 MiB 的文本文件不打包，但会在结果和清单的 `oversized_text_excluded` 中列出；并在包内生成 `PACKAGE_MANIFEST.json`（逐文件 SHA256）。
 - 包里含真实项目进度时，必须私有保存。扫描器不是完整的隐私检查。
 - 最终包的指纹记录在包外（回复或下一个检查点的证据里），避免自引用。
 

@@ -688,22 +688,38 @@ def _project_views(root):
         yield project_id(p), cp, seen
 
 
+def load_aliases(root):
+    """Navigation aliases from ALIASES.json ({"projects": {"domain/id": ["name", ...]}}); no checkpoint needed."""
+    try:
+        data = json.loads((Path(root) / 'ALIASES.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    projects = data.get('projects') if isinstance(data, dict) else None
+    return {k: [a for a in v if isinstance(a, str) and a.strip()] for k, v in (projects or {}).items() if isinstance(v, list)}
+
+
 def find(root, query, n=10):
     """Rank projects for a vague user reference ("the city documentary from last time"). All terms must match."""
     terms = [t.lower() for t in query.split() if t.strip()]
     if not terms:
         raise HandoffError('Empty query')
     weights = (('title', 5), ('goal', 3), ('context', 2), ('decisions', 1), ('constraints', 1), ('pending', 1),
-               ('notes', 1), ('project', 4))
+               ('notes', 1), ('project', 4), ('sync', 1))
+    aliases = load_aliases(root)
     out = []
     for ident, cp, seen in _project_views(root):
+        ctx_alias = (cp['state'].get('context') or {}).get('aliases')
+        names = [a.lower() for a in aliases.get(ident, []) + (ctx_alias if isinstance(ctx_alias, list) else [])
+                 if isinstance(a, str) and len(a.strip()) >= 2]
         s = cp['state']
         notes = ' '.join(c.get('note', '') for c in sorted(seen.values(), key=lambda c: -c['revision'])[:30])
         fields = {'title': s['title'], 'goal': s['goal'], 'project': ident, 'notes': notes,
-                  **{k: dump(s.get(k, '')).decode() for k in ('context', 'decisions', 'constraints', 'pending')}}
+                  **{k: dump(s.get(k, '')).decode() for k in ('context', 'decisions', 'constraints', 'pending', 'sync')}}
         score, matched = 0, set()
         for t in terms:
             hit = [(f, w) for f, w in weights if t in fields[f].lower()]
+            if any(t in a or a in t for a in names):  # the project's own name outranks mentions elsewhere
+                hit.append(('alias', 10))
             if not hit:
                 score = 0
                 break

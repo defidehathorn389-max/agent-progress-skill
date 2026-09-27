@@ -710,6 +710,11 @@ def doctor(root, git, token_present, remote_url=None, skill_dir=None):
         add('derived views', v['index_current'] and not stale, 'INDEX/CURRENT current' if v['index_current'] and not stale
             else f'stale: {stale or "INDEX.md"}', 'handoff.py rebuild, then push')
         lint = {x['project']: len(x['lint']) for x in v['projects'] if x['lint']}
+        if (root / 'ALIASES.json').exists():
+            known = {x['project'] for x in v['projects']} | set(v.get('unloaded_projects') or [])
+            unknown = sorted(set(handoff.load_aliases(root)) - known)
+            add('aliases', not unknown, 'ALIASES.json ok' if not unknown else f'unknown projects in ALIASES.json: {unknown}',
+                'fix or remove those entries', advisory=True)
         add('lint', not lint, 'no advisories' if not lint else f'advisories: {lint}',
             'see handoff.py validate --project P; fix during that project\'s next checkpoint', advisory=True)
     except handoff.HandoffError as e:
