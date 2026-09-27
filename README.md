@@ -1,62 +1,57 @@
-# Agent Progress · 唯一进度管理入口
+# Agent Progress：唯一进度与交接入口（v2）
 
-让接手模型读取文件而不是猜测上一段聊天。按方向/项目隔离，带历史检查点、证据、纠错记录、下一步和同步边界。
+让接手的模型读取文件，而不是猜测上一段聊天。项目按“方向/项目”隔离，包含不可变的历史检查点、证据、纠错记录、下一步和同步边界。
 
-入口：[SKILL.md](SKILL.md)。最新授权/自动同步规则：[SESSION_POLICY.md](SESSION_POLICY.md)。无平台专属依赖；本地进度工具只用Python标准库。
+- 入口：[SKILL.md](SKILL.md)（接手 → 记录 → 同步 → 收尾）
+- 凭据与自动同步：[SESSION_POLICY.md](SESSION_POLICY.md)
+- 新会话模板：[REMOTE_START.md](REMOTE_START.md)
+- 细节：[references/](references/)（恢复与冲突、同步原理、字段与补丁规范、便携包）
+- 变更说明：[CHANGELOG.md](CHANGELOG.md)
 
-## 交给下一模型的话
+## 交给下一位模型的一句话
 
-> 请先读取跨模型交接Skill的SKILL.md，再读取进度库的GLOBAL.md、LOCATION.json和INDEX.md。接手【方向/项目ID】，校验并读取该项目HEAD.json指向的检查点及相关证据；先说明已完成、未完成和下一步，再继续。不要混用其他项目进度，不要重复已完成任务。工作中及结束前更新检查点，并明确本地/远端同步状态。无法访问时先告诉我缺少什么。
-
-使用前将“Skill/进度库”替换为真实可访问的路径或已部署仓库地址。新仓库尚未创建时，不能把计划地址当作已生效入口。
+> 请先读取 agent-progress-skill 的 SKILL.md，按其“快速上手”克隆私有进度库，用 `handoff.py resume --project 【方向/项目ID】` 接手；先说明已完成、未完成和下一步再继续。工作中和结束前用 `update` 写检查点，并用 `progress_sync.py push` 推送，拿到 PUSHED_VERIFIED 再说已同步。无法访问时，先告诉我缺什么。
 
 ## 文件分工
 
-- 本仓库：通用规则、工具、模板与测试，可以公开。
-- 独立进度目录/仓库：具体用户项目状态，默认私有。
-- 既有项目仓库：大型媒体和工程，进度只引用其不可变版本与哈希。
-- 交接包：离线/断网的便携副本，含私有进度时不得公开；默认不含token密文、口令或原始聊天。
+- 本仓库（公开）：通用规则、工具、模板和测试，不含任何真实进度或秘密。
+- `agent-progress`（私有）：各项目的真实状态，路径为 `projects/<方向>/<项目ID>/`。
+- 素材/工程仓库：大媒体和工程文件。进度里只引用它们的不可变版本和哈希。
+- 便携包：离线时使用的副本，含私有进度，不得公开。
 
 ## 命令
 
 ```bash
-python scripts/handoff.py --root /path/to/handoff checkpoint --project research/example --expected NEW --state templates/state.json --note '创建项目'
-python scripts/handoff.py --root /path/to/handoff read --project research/example
-python scripts/handoff.py --root /path/to/handoff validate
-python scripts/handoff.py --root /path/to/handoff rebuild
-python -m unittest discover -s tests -v
+S=scripts
+python3 $S/handoff.py list
+python3 $S/handoff.py resume --project research/example          # 接手简报
+python3 $S/handoff.py read   --project research/example          # 完整 JSON
+python3 $S/handoff.py state  --project research/example > /tmp/state.json
+python3 $S/handoff.py checkpoint --project research/example --expected NEW --state templates/state.json --note '创建项目'
+python3 $S/handoff.py update --project research/example --expected <HEAD> --patch templates/patch.example.json --note '…' --dry-run
+python3 $S/handoff.py validate [--deep] [--verify-local --workspace DIR]
+python3 $S/handoff.py rebuild
+python3 $S/progress_sync.py --token-file /tmp/.gh_token clone --repo OWNER/agent-progress
+python3 $S/progress_sync.py --token-file /tmp/.gh_token status --fetch
+python3 $S/progress_sync.py --token-file /tmp/.gh_token push --project research/example -m 'research/example: …'
+python3 -m unittest discover -s tests
 ```
 
-工具能检测本地结构、引用、哈希、陈旧写入和部分秘密格式；不能证明模型遵守规则、远端最新状态或人工验收。跨机器并发仍需正常Git合并。
+`handoff.py` 和 `progress_sync.py` 只依赖 Python 3.9+ 标准库和 git 命令行。工具能检查结构、引用、哈希、陈旧写入、部分秘密格式和同步状态，但不能证明模型遵守了规则，也不能代替人工验收。
 
-## 便携交接包
+## 工具一览
 
-```bash
-python scripts/export_handoff.py --workspace /path/to/workspace \
-  --include skills/agent-progress-skill --include handoff \
-  --output /path/to/private-handoff.zip
-```
-
-只能显式选择需要的规则、进度和文本证据。工具排除凭据目录、密文、常见秘密文件、Git内部文件和大媒体，并生成包内SHA256清单。包里有真实项目进度时必须私有保存。扫描器不是完整的隐私检查。
+| 文件 | 作用 |
+|---|---|
+| `scripts/handoff.py` | 本地检查点：锁、expected-HEAD、不可变快照、父链校验（迭代实现，无深度上限）、补丁更新、接手简报、lint、派生视图。不联网 |
+| `scripts/progress_sync.py` | Git 同步：clone/status/push；token 只在内存中使用；定向暂存；派生视图冲突自动重建；用 ls-remote 核验 |
+| `scripts/export_handoff.py` | 离线便携包（排除凭据和媒体，附清单） |
+| `scripts/credential_vault.py`、`session_github.py`、`sync_progress.py` | 可选的密文封装模式（旧流程，需要 `requests cryptography`） |
+| `templates/state.json`、`templates/patch.example.json` | 新项目模板、补丁示例 |
 
 ## 远程入口
 
-公开规则：https://github.com/defidehathorn389-max/agent-progress-skill
+- 公开规则：https://github.com/defidehathorn389-max/agent-progress-skill
+- 私有进度：https://github.com/defidehathorn389-max/agent-progress
 
-私有进度：https://github.com/defidehathorn389-max/agent-progress
-
-仓库的实际部署/核验状态以私有进度的LOCATION.json与sync/latest.json为准。用户在当前启动消息已提供口令时不再询问；每次实质性回复结束前自动保存有变化的进度并推送核验。
-
-## 一次会话授权与自动推送工具
-
-- `SESSION_POLICY.md`：当前会话已经提供口令就不再问；每次有实质性变化的回复结束前自动保存/推送。
-- `REMOTE_START.md`：远程可复制模板，只保留占位符，不含真实口令或密文。
-- `scripts/credential_vault.py`：AES-GCM+scrypt密文解密，禁止回显明文token。
-- `scripts/session_github.py`：内存内复用当前会话认证，受限socket向Git内部管道提供凭据；关闭时清理。
-- `scripts/sync_progress.py`：私有进度发布、独立克隆哈希校验和不自引用的检查点同步回执；不自行询问密码。
-
-本地检查点工具仍仅依赖Python标准库。联网认证工具需要`requests cryptography`；只有明确的当前会话授权后才调用。
-
-## 不再建立平行交接
-
-所有实际项目进入私有agent-progress的projects目录。业务Skill仅引用本工具。HEAD是权威指针，CURRENT是派生视图，不另建项目专属handoff库。若平台支持安装Skill，可将本Skill注册为agent-progress；GitHub仓库地址本身不自动提供斜杠命令。
+仓库的实际部署状态以私有进度的 `LOCATION.json` 为准；同步状态以 `progress_sync.py status --fetch` 为准。平台支持安装 Skill 时，可以把本仓库注册为 `agent-progress`；仅有 GitHub 地址不会自动提供斜杠命令。

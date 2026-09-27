@@ -2,8 +2,13 @@ import unittest,tempfile,sys,subprocess
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from session_github import SessionGitHub
+try:
+ from session_github import SessionGitHub
+ MISSING=None
+except ImportError as e:  # optional vault-mode dependencies (requests, cryptography)
+ SessionGitHub=None;MISSING=e.name
 
+@unittest.skipIf(SessionGitHub is None,'optional vault-mode dependency missing: '+str(MISSING)+' (pip install requests cryptography)')
 class SessionTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.u=patch('session_github.unlock',return_value='synthetic-test-no-access');self.r=patch('session_github.read_envelope',return_value={});self.u.start();self.r.start();self.s=SessionGitHub('unused-test-input','not-a-real-vault',self.tmp.name,['owner/allowed'])

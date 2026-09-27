@@ -1,0 +1,26 @@
+{
+  "set": {
+    "status": "READY_FOR_REVIEW",
+    "handoff.first_action": "向用户呈现样片并用选择题收集终审意见",
+    "handoff.waiting_for": "用户终审",
+    "context.current_episode": "EP-026"
+  },
+  "unset": ["handoff.obsolete_key"],
+  "remove": {"pending": ["render-sample"]},
+  "upsert": {
+    "pending": [
+      {"id": "final-review", "action": "用户终审样片", "blocked_by": "等待用户", "done_when": "用户明确通过或给出修改点"}
+    ]
+  },
+  "append": {
+    "evidence": [
+      {"id": "ev-sample-qa", "kind": "local_test", "source": "tools/validate_video.py 输出", "scope": "编码/时长/帧率检查", "limitations": "不代表人工终审"}
+    ],
+    "completed": [
+      {"item": "渲染样片并通过技术检查", "evidence": ["ev-sample-qa"]}
+    ],
+    "decisions": [
+      {"id": "d-speed", "decision": "本片语速 1.2 倍", "source": "用户本轮消息", "scope": "仅本项目", "supersedes": "d-speed-old"}
+    ]
+  }
+}
