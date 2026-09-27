@@ -1,5 +1,9 @@
 # 变更记录
 
+## v2.3.2 — 2026-09-27
+
+- REMOTE_START.md 的新会话提示词改用当前流程：doctor → find/recent → resume → save（PUSHED_VERIFIED）→ 用提问组件收尾；写明 token 的存放规则。
+
 ## v2.3.1 — 2026-09-27
 
 - 项目别名：根目录可选的 `ALIASES.json`（`{"projects": {"domain/id": ["别名", …]}}`，改了不需要写检查点），加上 `context.aliases`。`find` 命中项目自己的别名时权重最高，查询包含别名也算命中（例如“上次那个谜题动画的第25期”）。在真实数据上，此前有 4 个查询排错或找不到，现在都指向正确的项目。

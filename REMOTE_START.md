@@ -5,23 +5,22 @@
 ## A. 明文 token 模式（推荐）
 
 ```
-本次主题/任务：【……】
+本次任务：【要做的事；没有新任务就写“列出进行中的项目让我选”】
+项目：【方向/项目ID，或你平时的叫法；不确定可以不写】
 
-请先读取 https://github.com/defidehathorn389-max/agent-progress-skill 的 SKILL.md，并按其规则操作；
-私有进度库是 https://github.com/defidehathorn389-max/agent-progress。
-对应项目：【方向/项目ID；不确定就列出候选让我选】。
+请按 https://github.com/defidehathorn389-max/agent-progress-skill 的 SKILL.md 操作：
+1. 按“快速上手”准备工具和私有进度库 https://github.com/defidehathorn389-max/agent-progress，先运行 doctor；
+2. 我没给项目 ID 时，用 find / recent 定位项目，再用 resume 接手；动手前先告诉我：已完成什么、还剩什么、下一步做什么；
+3. 工作中和结束前用 save 写检查点（交接文档 = 该项目的 CURRENT.md），看到 PUSHED_VERIFIED 才算同步；
+4. 结束时不要直接结束对话：用选择题/自定义回答组件收尾，留出我补充的位置。
 
-GitHub token（本对话内复用；可以存放在任何 Git 仓库之外的工作区文件里，不提交进仓库，也不写进远端 URL）：
-【在私有消息中填入 fine-grained token】
-
-完成任务后：
-1. 把本次进度写入该项目的检查点（交接文档 = 该项目的 CURRENT.md），推送后确认 PUSHED_VERIFIED；
-2. 不要结束对话：用客户端的选择题/自定义回答组件收尾，在末尾留出我回答和补充信息的位置。
+GitHub token（本对话内复用；可以存到仓库之外的 /home/user/.secrets/github_token，不要提交进仓库，也不要写进远端 URL）：
+【粘贴 token】
 ```
 
 ## B. 密文封装模式（可选）
 
-把上面模板中的 token 一行换成：
+把上面模板末尾的 token 两行换成：
 
 ```
 本次会话解密口令：【在私有消息中填入】
