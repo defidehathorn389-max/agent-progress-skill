@@ -15,7 +15,7 @@
 
 ## 推荐的 token 配置（用户侧）
 
-- 使用 **Fine-grained personal access token**，Repository access 只勾选需要的仓库（通常是 `agent-progress`；需要让模型改规则时再加 `agent-progress-skill` 或相关素材库），权限 `Contents: Read and write`（`Metadata: Read` 会自动附带），并设置 30–90 天有效期。
+- 使用 **Fine-grained personal access token**，Repository access 只勾选需要的仓库（通常是 `agent-progress`、`agent-memory`、`agent-skills`；需要让模型改规则时再加 `agent-progress-skill` 或相关素材库），权限 `Contents: Read and write`（`Metadata: Read` 会自动附带），并设置 30–90 天有效期。
 - 不要把带 `delete_repo`、`admin:*`、`workflow`、`user` 等权限的 classic token 交给模型；这类 token 一旦泄露，整个账号都会暴露。
 - token 在聊天中出现过，任务完成后可以在 GitHub → Settings → Developer settings 撤销并重新生成。
 

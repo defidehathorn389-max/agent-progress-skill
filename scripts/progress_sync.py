@@ -119,7 +119,8 @@ def read_token(token_file, root):
 
 def location_remote(root):
     try:
-        url = json.loads((Path(root) / 'LOCATION.json').read_text(encoding='utf-8')).get('progress_remote_url')
+        loc = json.loads((Path(root) / 'LOCATION.json').read_text(encoding='utf-8'))
+        url = loc.get('remote_url') or loc.get('progress_remote_url')
     except (OSError, ValueError, AttributeError):
         return None
     return url if isinstance(url, str) and url.startswith(('https://', 'git@', '/')) and not USERINFO.search(url) else None
@@ -601,6 +602,101 @@ def reconcile(root, git, project, remote_url=None):
                      f'progress_sync.py push --project {project} -m "{project}: merge parallel checkpoints"']}
 
 
+def _rebase_regen(root, git, branch, ident, derived, regenerate):
+    """Rebase for companion repositories: conflicts limited to derived files are regenerated."""
+    regenerated, rounds = [], 0
+    p = git.run(ident + ['rebase', '--quiet', f'refs/remotes/origin/{branch}'], root, check=False)
+    while p.returncode != 0:
+        rounds += 1
+        conflicted = [c for c in git.out(['diff', '--name-only', '--diff-filter=U'], root).splitlines() if c]
+        in_rebase = (Path(root) / '.git' / 'rebase-merge').exists() or (Path(root) / '.git' / 'rebase-apply').exists()
+        if not conflicted and in_rebase and rounds <= 50:
+            p = git.run(ident + ['rebase', '--skip'], root, check=False)
+            continue
+        if not conflicted or rounds > 50 or not regenerate or not all(c in derived for c in conflicted):
+            git.run(['rebase', '--abort'], root, check=False)
+            raise SyncError('Concurrent remote changes conflict in: ' + (', '.join(conflicted) or 'unknown paths') +
+                            '. Local commits are kept; reconcile those files, then sync again. Never force-push.')
+        regenerate(root)
+        git.run(['add', '--'] + sorted(set(conflicted) | {d for d in derived if (Path(root) / d).exists()}), root)
+        regenerated += conflicted
+        p = git.run(ident + ['rebase', '--continue'], root, check=False)
+    return regenerated
+
+
+def push_paths(root, git, paths, message, regenerate=None, derived=(), remote_url=None, max_file_mb=25):
+    """Verified push for companion repositories (agent-memory, agent-skills): stage only `paths`,
+    regenerate derived files, scan for credentials/oversized files, commit once, rebase (derived-file
+    conflicts regenerated), push without force and verify with ls-remote."""
+    root = Path(root).resolve()
+    if not message.strip():
+        raise SyncError('A commit message is required')
+    info = repo_info(root, git, remote_url)
+    branch = info['branch']
+    ensure_no_operation_in_progress(root)
+    if regenerate:
+        regenerate(root)
+    paths = [p for p in paths if (root / p).exists() or
+             git.run(['ls-files', '--error-unmatch', '--', p], root, check=False).returncode == 0]
+    entries = status_entries(root, git)
+    staged_outside = [p for xy, p in entries if xy[0] not in ' ?' and not under(p, paths)]
+    if staged_outside:
+        raise SyncError('Other staged paths present: ' + ', '.join(staged_outside[:10]))
+    blocking = [p for xy, p in entries if xy != '??' and xy[1] != ' ' and not under(p, paths)]
+    if blocking:
+        raise SyncError('Uncommitted changes outside the synced paths would block a safe rebase: ' + ', '.join(blocking[:10]))
+    ident, ident_source = identity(git, root)
+    if paths:
+        git.run(['add', '-A', '--'] + paths, root)
+    raw = git.run(['diff', '--cached', '--name-status', '--no-renames', '-z'], root).stdout.decode('utf-8', 'replace')
+    fields = [x for x in raw.split('\0') if x]
+    staged = list(zip(fields[0::2], fields[1::2]))
+    problems = []
+    for code, path in staged:
+        blob = None if code[0] == 'D' else git.run(['cat-file', 'blob', ':' + path], root).stdout
+        problems += scan_content(path, blob, git, max_file_mb * 1024 * 1024)
+    if problems:
+        git.run(['reset', '-q', '--'] + paths, root)
+        raise SyncError('Refused to commit: ' + '; '.join(problems))
+    if staged:
+        git.run(ident + ['commit', '--quiet', '-m', message], root)
+    rebased, regenerated = False, []
+    remote_exists = remote_branch_exists(git, root, branch)
+    if remote_exists:
+        git.run(['fetch', '--quiet', 'origin', branch], root)
+        if int(git.out(['rev-list', '--count', f'HEAD..refs/remotes/origin/{branch}'], root)):
+            regenerated, rebased = _rebase_regen(root, git, branch, ident, set(derived), regenerate), True
+        ahead = int(git.out(['rev-list', '--count', f'refs/remotes/origin/{branch}..HEAD'], root))
+    else:
+        ahead = int(git.out(['rev-list', '--count', 'HEAD'], root, check=False) or 0)
+    local = git.out(['rev-parse', '--verify', '--quiet', 'HEAD'], root, check=False)
+    if ahead == 0:
+        line = git.out(['ls-remote', 'origin', f'refs/heads/{branch}'], root)
+        state = 'NO_CHANGES' if line.split() and line.split()[0] == local else 'UNCERTAIN_REMOTE'
+        return {'status': state, 'commit': local, 'branch': branch, 'checked_at': utcnow()}
+    for attempt in (1, 2):
+        p = git.run(['push', '--quiet', 'origin', f'HEAD:refs/heads/{branch}'], root, check=False)
+        if p.returncode == 0:
+            break
+        err = git.redact(p.stderr.decode('utf-8', 'replace'))
+        if attempt == 1 and re.search(r'non-fast-forward|fetch first|rejected', err):
+            git.run(['fetch', '--quiet', 'origin', branch], root)
+            regenerated += _rebase_regen(root, git, branch, ident, set(derived), regenerate)
+            rebased = True
+            continue
+        raise SyncError('push failed (local commit kept): ' + err.strip()[-600:])
+    local = git.out(['rev-parse', 'HEAD'], root)
+    line = git.out(['ls-remote', 'origin', f'refs/heads/{branch}'], root)
+    if not line.split() or line.split()[0] != local:
+        raise SyncError('UNCERTAIN: remote ref does not match the local commit after push; re-read before retrying')
+    git.run(['fetch', '--quiet', 'origin', branch], root, check=False)
+    result = {'status': 'PUSHED_VERIFIED', 'commit': local, 'branch': branch, 'rebased_onto_remote': rebased,
+              'derived_conflicts_regenerated': regenerated, 'identity': ident_source, 'verified_at': utcnow()}
+    if info['repairs']:
+        result['repairs'] = info['repairs']
+    return result
+
+
 def pull(root, git, remote_url=None):
     """Bring the clone up to date without losing local commits: fast-forward, or rebase local commits
     (derived-view conflicts are regenerated; anything else aborts cleanly). Never discards work."""
@@ -719,6 +815,46 @@ def doctor(root, git, token_present, remote_url=None, skill_dir=None):
             'see handoff.py validate --project P; fix during that project\'s next checkpoint', advisory=True)
     except handoff.HandoffError as e:
         add('integrity', False, str(e), 'see references/recovery.md; do not overwrite HEAD')
+    try:
+        loc = json.loads((root / 'LOCATION.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        loc = {}
+    for label, key, env, default in (('memory repo', 'memory_remote_url', 'AGENT_MEMORY_ROOT', '/home/user/agent-memory'),
+                                     ('skills repo', 'skills_remote_url', 'AGENT_SKILLS_ROOT', '/home/user/agent-skills')):
+        url = loc.get(key)
+        if not url:
+            continue  # companion repositories not configured for this progress repository
+        croot = Path(os.environ.get(env) or default)
+        repo = re.sub(r'^https://github\.com/|\.git$', '', url)
+        if not (croot / '.git').exists():
+            add(label, False, f'{croot} not cloned', f'progress_sync.py --root {croot} --token-file F clone --repo {repo}')
+            continue
+        try:
+            cinfo = repo_info(croot, git, url)
+            cbranch = cinfo['branch']
+            if remote_branch_exists(git, croot, cbranch):
+                git.run(['fetch', '--quiet', 'origin', cbranch], croot)
+                behind, ahead = (int(x) for x in git.out(['rev-list', '--left-right', '--count',
+                                                            f'refs/remotes/origin/{cbranch}...HEAD'], croot).split())
+            else:
+                behind = ahead = 0
+            cdirty = [p_ for xy, p_ in status_entries(croot, git) if xy != '??']
+            if label == 'memory repo':
+                import memory as companion
+                detail = companion.validate(croot)
+                summary = f"items {detail['counts']}, expired pending {len(detail['expired_pending'])}"
+            else:
+                import skills as companion
+                detail = companion.verify(croot)
+                summary = f"external verified {len(detail['verified'])}, problems {len(detail['problems'])}"
+                if not detail['pass']:
+                    raise SyncError('external skill files changed since review: ' + str(detail['problems'])[:200])
+            ok = behind == 0 and ahead == 0 and not cdirty
+            add(label, ok, f'ahead {ahead}, behind {behind}, uncommitted {len(cdirty)}; {summary}' +
+                ('; origin re-added' if cinfo['repairs'] else ''),
+                'pull (progress_sync.py --root DIR pull) or sync the pending changes (memory.py / skills.py sync)')
+        except Exception as e:  # noqa: BLE001 - report, never crash the health check
+            add(label, False, str(e)[:200], 'see references/memory.md or references/skills.md')
     if skill_dir:
         local, remote, pinned, url = _skill_heads(git, skill_dir, root)
         ok = bool(local) and (not remote or local == remote)

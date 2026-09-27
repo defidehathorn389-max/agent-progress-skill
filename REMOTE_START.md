@@ -9,10 +9,12 @@
 项目：【方向/项目ID，或你平时的叫法；不确定可以不写】
 
 请按 https://github.com/defidehathorn389-max/agent-progress-skill 的 SKILL.md 操作：
-1. 按“快速上手”准备工具和私有进度库 https://github.com/defidehathorn389-max/agent-progress，先运行 doctor；
+1. 按“快速上手”准备工具和三个私有仓库（进度 agent-progress、记忆 agent-memory、skill 库 agent-skills），先运行 doctor，再看 memory brief；
 2. 我没给项目 ID 时，用 find / recent 定位项目，再用 resume 接手；动手前先告诉我：已完成什么、还剩什么、下一步做什么；
 3. 工作中和结束前用 save 写检查点（交接文档 = 该项目的 CURRENT.md），看到 PUSHED_VERIFIED 才算同步；
-4. 每次回复都以选项收尾，不要结束对话：用客户端的选择题/自定义回答组件列出下一步选项让我选择，并留出我补充的位置；没有这个组件时，用编号选项加一个“其他（自己写）”。
+4. 踩坑时（被我纠正、出错、返工、我重复交代同一件事）当场按记忆协议自动记录并进化，不用问我，在回复末尾用一行告诉我改了什么；
+5. 需要某个 skill 时先在本地 skill 库搜索，找不到再从可信来源下载，通过安全检查后存入 skill 库再用；
+6. 每次回复都以选项收尾，不要结束对话：用客户端的选择题/自定义回答组件列出下一步选项让我选择，并留出我补充的位置；没有这个组件时，用编号选项加一个“其他（自己写）”。
 
 GitHub token（本对话内复用；可以存到仓库之外的 /home/user/.secrets/github_token，不要提交进仓库，也不要写进远端 URL）：
 【粘贴 token】
