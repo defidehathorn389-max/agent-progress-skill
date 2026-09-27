@@ -1,5 +1,9 @@
 # 变更记录
 
+## v2.3.3 — 2026-09-27
+
+- 按用户要求：每次回复都以选项收尾（选择题/自定义回答组件；没有组件时用编号选项加“其他”），不结束对话。已同步到 REMOTE_START.md 的提示词和 SKILL.md §5。
+
 ## v2.3.2 — 2026-09-27
 
 - REMOTE_START.md 的新会话提示词改用当前流程：doctor → find/recent → resume → save（PUSHED_VERIFIED）→ 用提问组件收尾；写明 token 的存放规则。

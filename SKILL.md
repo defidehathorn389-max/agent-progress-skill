@@ -84,7 +84,7 @@ python3 $S/progress_sync.py --token-file $T save --project <方向>/<项目ID> -
 1. 用一条命令写入并同步：`progress_sync.py save --project … --expected <HEAD> --patch … --note …`（等于 `update` + `push`）；或者分两步 `handoff.py update`，再 `progress_sync.py push`。
 2. 要看到 `PUSHED_VERIFIED`。推送失败时，检查点仍保留在本地，`save` 会明确报告 LOCAL_ONLY；明确写 `LOCAL_ONLY` 或 `PENDING_SYNC` 及原因；不循环重试、不强推。多条命令用 `set -euo pipefail`，检查点失败就停，不拿旧 HEAD 报“已完成”。
 3. 回复里写明：实际结果、未完成/阻塞、交接入口（项目 ID + 检查点 ID）、同步状态，以及给下一位模型的一句话。
-4. 如果用户要求（或 `GLOBAL.md` 记录了这项偏好），用客户端的选择题/自定义回答组件收尾，给出下一步选项，留出补充信息的位置，不要直接结束对话。
+4. 按 `GLOBAL.md` 记录的用户偏好：**每次回复**都以选项收尾，用客户端的选择题/自定义回答组件列出下一步选项，并留出补充空间；没有该组件时，用编号选项加“其他（自己写）”。不要直接结束对话。
 
 ## 6. 进阶与故障处理
 

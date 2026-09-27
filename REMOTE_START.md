@@ -12,7 +12,7 @@
 1. 按“快速上手”准备工具和私有进度库 https://github.com/defidehathorn389-max/agent-progress，先运行 doctor；
 2. 我没给项目 ID 时，用 find / recent 定位项目，再用 resume 接手；动手前先告诉我：已完成什么、还剩什么、下一步做什么；
 3. 工作中和结束前用 save 写检查点（交接文档 = 该项目的 CURRENT.md），看到 PUSHED_VERIFIED 才算同步；
-4. 结束时不要直接结束对话：用选择题/自定义回答组件收尾，留出我补充的位置。
+4. 每次回复都以选项收尾，不要结束对话：用客户端的选择题/自定义回答组件列出下一步选项让我选择，并留出我补充的位置；没有这个组件时，用编号选项加一个“其他（自己写）”。
 
 GitHub token（本对话内复用；可以存到仓库之外的 /home/user/.secrets/github_token，不要提交进仓库，也不要写进远端 URL）：
 【粘贴 token】
