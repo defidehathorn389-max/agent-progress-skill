@@ -21,6 +21,16 @@
 
 范围：`global`、`domain:<方向>`、`project:<方向>/<项目ID>`。只和某个项目相关的坑，同时写在该项目检查点的 `avoid` 里；通用的坑写进记忆库。
 
+## 计数、编辑与合并
+
+- **同一个坑再次发生** → `learn`，用相同或几乎相同的标题（措辞只差空格或标点会自动认作同一条），次数 +1。输出里出现 `similar` 时，说明已有措辞相近或规则相同的条目：如果是同一个坑，用 `memory.py merge --from 新ID --into 旧ID` 合并，次数会相加。
+- **只是改正文字、范围、标签、关联项目** → `memory.py edit --id ID --set scope=domain:workflow --set source_projects=a/b,c/d`。不计为再次发生，次数不变。
+- 推断的偏好被再次观察到时，用 `prefer` 再记一次，`×N` 会增加，表示依据越来越充分。
+- 偏好优先级：`--priority 1`（关键，简报里带 ★ 排在最前）、`2`（默认）、`3`（背景：SKILL 规则已经覆盖，简报里折叠成一行，`brief --full` 查看）。
+- 条目都可以用简报里括号中的 6 位短 ID 指代（至少 4 位，必须唯一）。
+- `memory.py validate` 会列出可能重复的条目（`possible_duplicates`），发现就合并。
+- 范围要准：工具开发类的教训用 `domain:workflow`，视频类用 `domain:video-production`，只有普遍适用的才用 `global`。这样做视频时不会看到写代码的坑。
+
 ## 自我进化：踩坑时自动进行，不征求同意
 
 **什么算踩坑**（`--trigger`）：

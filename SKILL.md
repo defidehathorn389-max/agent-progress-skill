@@ -116,7 +116,7 @@ python3 $S/handoff.py log --project D/P -n 20          # 历史时间线（resum
 python3 $S/handoff.py find '关键词' | recent -n 10     # 用户没给项目 ID 时定位项目
 python3 $S/handoff.py compact --project D/P --expected <HEAD> --dry-run   # 状态过大时
 python3 $S/progress_sync.py --token-file $T doctor | pull | status --fetch | reconcile --project D/P
-python3 $S/memory.py search 关键词 | expire | validate | retire --id ID --reason …
+python3 $S/memory.py search 关键词 | edit --id ID --set k=v | merge --from ID --into ID | retire --id ID --reason … | expire | validate
 python3 $S/skills.py search 关键词 | fetch --repo O/R --path P | review DIR | add … | verify | privacy-scan --path DIR
 python3 -m unittest discover -s /home/user/agent-progress-skill/tests
 ```
