@@ -158,5 +158,22 @@ class TagsAndOutdated(unittest.TestCase):
         self.assertIn('--replace', res['update'])
 
 
+_WS_TMP = None
+
+
+def setUpModule():  # doctor measures the persisted workspace: keep tests independent of the real one
+    global _WS_TMP
+    import os as _os
+    import tempfile as _tempfile
+    _WS_TMP = _tempfile.TemporaryDirectory()
+    _os.environ['AGENT_WORKSPACE_HOME'] = _WS_TMP.name
+
+
+def tearDownModule():
+    import os as _os
+    _os.environ.pop('AGENT_WORKSPACE_HOME', None)
+    _WS_TMP.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()

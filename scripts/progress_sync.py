@@ -43,6 +43,8 @@ FORBIDDEN = re.compile(r'(^|/)(\.env[^/]*|\.netrc|\.git-credentials|credentials|
                        r'|\.enc\.json$|\.pem$|\.key$|(^|/)\.write\.lock$|\.tmp$')
 DERIVED = re.compile(r'^(INDEX\.md|projects/[a-z0-9-]+/[a-z0-9-]+/CURRENT\.md)$')
 HEAD_FILE = re.compile(r'^projects/([a-z0-9-]+/[a-z0-9-]+)/HEAD\.json$')
+SLIM_PATTERNS = ('/*', '!/evidence/', '!/sync-receipts/')  # slim progress clone: no media evidence, no legacy receipts
+MEDIA_BLOCKED = {'.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v', '.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.opus'}
 REPO_RE = re.compile(r'^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$')
 USERINFO = re.compile(r'(https?://)[^/@\s]+@')
 FALLBACK_IDENTITY = ['-c', 'user.name=agent-progress', '-c', 'user.email=agent-progress@users.noreply.github.com']
@@ -123,7 +125,7 @@ def location_remote(root):
         url = loc.get('remote_url') or loc.get('progress_remote_url')
     except (OSError, ValueError, AttributeError):
         return None
-    return url if isinstance(url, str) and url.startswith(('https://', 'git@', '/')) and not USERINFO.search(url) else None
+    return url if isinstance(url, str) and url.startswith(('https://', 'git@', '/', 'file://')) and not USERINFO.search(url) else None
 
 
 def ensure_origin(root, git, remote_url=None):
@@ -236,7 +238,7 @@ def scan_content(path, blob, git, max_bytes):
 
 # ---------------------------------------------------------------- commands
 
-def clone(git, dest, repo=None, url=None, depth=None):
+def clone(git, dest, repo=None, url=None, depth=None, slim=False):
     if repo:
         if not REPO_RE.fullmatch(repo):
             raise SyncError('--repo must look like owner/name')
@@ -249,9 +251,16 @@ def clone(git, dest, repo=None, url=None, depth=None):
     if dest.exists() and any(dest.iterdir()):
         raise SyncError('Destination exists and is not empty: ' + str(dest))
     dest.parent.mkdir(parents=True, exist_ok=True)
-    args = ['clone', '--quiet'] + (['--depth', str(depth)] if depth else []) + [url, str(dest)]
+    args = ['clone', '--quiet'] + (['--filter=blob:none', '--no-checkout'] if slim else []) + \
+        (['--depth', str(depth)] if depth else []) + [url, str(dest)]
     git.run(args, dest.parent)
-    return {'status': 'CLONED', 'dest': str(dest),
+    if slim:  # history without old file contents; sparse working tree without media evidence
+        git.run(['sparse-checkout', 'init', '--no-cone'], dest)
+        (dest / '.git' / 'info' / 'sparse-checkout').write_text('\n'.join(SLIM_PATTERNS) + '\n')
+        branch = git.out(['symbolic-ref', '--quiet', '--short', 'HEAD'], dest, check=False)
+        if branch and git.run(['rev-parse', '--verify', '--quiet', f'refs/remotes/origin/{branch}'], dest, check=False).returncode == 0:
+            git.run(['checkout', '--quiet', branch], dest)
+    return {'status': 'CLONED', 'dest': str(dest), 'slim': slim,
             'commit': git.out(['rev-parse', '--verify', '--quiet', 'HEAD'], dest, check=False) or None,
             'branch': git.out(['symbolic-ref', '--quiet', '--short', 'HEAD'], dest, check=False)}
 
@@ -478,6 +487,9 @@ def push(root, git, projects, extra_paths=(), message='', dry_run=False, max_fil
     staged = list(zip(fields[0::2], fields[1::2]))
     problems = []
     for code, path in staged:
+        if code[0] in 'AM' and Path(path).suffix.lower() in MEDIA_BLOCKED:
+            problems.append(f'audio/video file in the progress repository: {path} (keep media in the project asset '
+                            'repository or a Release; record its URL/commit + SHA256 here instead)')
         if '/checkpoints/' in path and code[0] in 'DM':
             problems.append(f'immutable checkpoint would be {"deleted" if code[0] == "D" else "modified"}: {path}')
         blob = None if code[0] == 'D' else git.run(['cat-file', 'blob', ':' + path], root).stdout
@@ -816,6 +828,15 @@ def doctor(root, git, token_present, remote_url=None, skill_dir=None):
     except handoff.HandoffError as e:
         add('integrity', False, str(e), 'see references/recovery.md; do not overwrite HEAD')
     try:
+        import workspace
+        fp = workspace.footprint()
+        detail = (f"{fp['bytes'] / 1e6:.0f} MB / {fp['files']} files persisted = {max(fp['size_ratio'], fp['files_ratio']):.0%} "
+                  f"of the snapshot cap (~{fp['cap_bytes'] // 1_000_000} MB / {fp['cap_files']} files)")
+        add('workspace', fp['level'] == 'ok', detail, '; '.join(fp['advice']) or 'workspace.py status',
+            advisory=fp['level'] == 'warn')
+    except Exception as e:  # noqa: BLE001 - never crash the health check
+        add('workspace', False, f'could not measure: {str(e)[:120]}', 'workspace.py status', advisory=True)
+    try:
         loc = json.loads((root / 'LOCATION.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
         loc = {}
@@ -885,6 +906,7 @@ def main(argv=None):
     src.add_argument('--url', help='other clean remote URL or local path (tests/mirrors)')
     c.add_argument('--dest', type=Path, help='defaults to --root')
     c.add_argument('--depth', type=int)
+    c.add_argument('--slim', action='store_true', help='history without old file contents; skip evidence/ and sync-receipts/')
     s = sub.add_parser('status')
     s.add_argument('--fetch', action='store_true')
     s.add_argument('--project', action='append')
@@ -912,7 +934,7 @@ def main(argv=None):
         token = read_token(a.token_file, a.root)
         git = Git(token)
         if a.command == 'clone':
-            result = clone(git, a.dest or a.root, a.repo, a.url, a.depth)
+            result = clone(git, a.dest or a.root, a.repo, a.url, a.depth, a.slim)
         elif a.command == 'status':
             result = status(a.root, git, a.fetch, a.project, a.remote_url)
         elif a.command == 'reconcile':
