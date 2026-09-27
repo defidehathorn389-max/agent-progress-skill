@@ -8,6 +8,8 @@
   push   --project D/P [--project ...] [--path REL ...] -m MESSAGE [--dry-run]
   save   --project D/P --expected ID --patch FILE|- --note TEXT [-m MESSAGE] [--path REL ...] [--dry-run]
                                                        handoff update + push in one step (end-of-turn)
+  reconcile --project D/P                              same project changed in two sessions: fetch the other
+                                                       side's checkpoints and show both states for a merge
 
 Workspace snapshots on some platforms drop .git/config (remote + identity). Every command re-adds a
 missing `origin` from LOCATION.json (progress_remote_url) or --remote-url, and commits fall back to
@@ -40,6 +42,7 @@ import handoff  # noqa: E402
 FORBIDDEN = re.compile(r'(^|/)(\.env[^/]*|\.netrc|\.git-credentials|credentials|\.credentials)(/|$)'
                        r'|\.enc\.json$|\.pem$|\.key$|(^|/)\.write\.lock$|\.tmp$')
 DERIVED = re.compile(r'^(INDEX\.md|projects/[a-z0-9-]+/[a-z0-9-]+/CURRENT\.md)$')
+HEAD_FILE = re.compile(r'^projects/([a-z0-9-]+/[a-z0-9-]+)/HEAD\.json$')
 REPO_RE = re.compile(r'^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$')
 USERINFO = re.compile(r'(https?://)[^/@\s]+@')
 FALLBACK_IDENTITY = ['-c', 'user.name=agent-progress', '-c', 'user.email=agent-progress@users.noreply.github.com']
@@ -317,6 +320,71 @@ def status(root, git, fetch=False, projects=None, remote_url=None):
     return result
 
 
+def descends(pdir, start_cid, target_cid):
+    """True if target_cid is start_cid or one of its ancestors (checkpoint files in the working tree)."""
+    seen, stack = set(), [start_cid]
+    while stack:
+        cid = stack.pop()
+        if cid == target_cid:
+            return True
+        if not isinstance(cid, str) or cid in seen:
+            continue
+        seen.add(cid)
+        f = Path(pdir) / 'checkpoints' / f'{cid}.json'
+        try:
+            parents = json.loads(f.read_bytes()).get('parents', [])
+        except (OSError, ValueError):
+            continue
+        stack.extend(q.get('checkpoint_id') for q in parents if isinstance(q, dict))
+    return False
+
+
+def merge_remote(root, git, branch, ident):
+    """Fallback when a rebase cannot replay commits (typically after `reconcile` + a --merge-parent
+    checkpoint). HEAD.json conflicts resolve only to the side whose checkpoint descends from the
+    other's; derived views are regenerated; anything else aborts the merge (no loss, no force)."""
+    root = Path(root)
+    remote_ref = f'refs/remotes/origin/{branch}'
+    p = git.run(ident + ['merge', '--no-ff', '--no-edit', '-m', f'Merge {remote_ref} (reconciled checkpoints)',
+                         remote_ref], root, check=False)
+    if p.returncode == 0:
+        return ['merge']
+    conflicted = [c for c in git.out(['diff', '--name-only', '--diff-filter=U'], root).splitlines() if c]
+    touched = set()
+    try:
+        for c in conflicted:
+            if DERIVED.fullmatch(c):
+                continue
+            m = HEAD_FILE.fullmatch(c)
+            if not m:
+                raise SyncError(f'conflict outside checkpoints/derived views: {c}')
+            ours, theirs = show_bytes(git, root, ':2:' + c), show_bytes(git, root, ':3:' + c)
+            pdir = handoff.project_dir(root, m.group(1))
+            o, t = json.loads(ours)['checkpoint_id'], json.loads(theirs)['checkpoint_id']
+            if descends(pdir, o, t):
+                (root / c).write_bytes(ours)
+            elif descends(pdir, t, o):
+                (root / c).write_bytes(theirs)
+            else:
+                raise SyncError(f'{m.group(1)}: checkpoints {o} and {t} diverged; run reconcile --project {m.group(1)}')
+            touched.add(m.group(1))
+        for c in conflicted:
+            if c != 'INDEX.md' and DERIVED.fullmatch(c):
+                touched.add('/'.join(c.split('/')[1:3]))
+        for proj in touched:
+            pdir = handoff.project_dir(root, proj)
+            handoff.validate(root, proj)  # merged chain must verify before committing
+            _, cp = handoff.checked_head(pdir)
+            handoff.atomic(pdir / 'CURRENT.md', handoff.current_bytes(cp))
+        handoff.atomic(root / 'INDEX.md', handoff.index_bytes(root))
+        git.run(['add', '--'] + sorted(set(conflicted) | {'INDEX.md'} | {f'projects/{x}/CURRENT.md' for x in touched}), root)
+        git.run(ident + ['commit', '--quiet', '--no-edit'], root)
+    except (SyncError, handoff.HandoffError, ValueError, TypeError) as e:
+        git.run(['merge', '--abort'], root, check=False)
+        raise SyncError(str(e))
+    return ['merge'] + conflicted
+
+
 def rebase_onto_remote(root, git, branch, ident):
     """Rebase local commits onto origin. Conflicts limited to derived views are regenerated;
     anything else aborts the rebase (no data loss, no force)."""
@@ -332,10 +400,15 @@ def rebase_onto_remote(root, git, branch, ident):
             continue
         if not conflicted or rounds > 50 or not all(DERIVED.fullmatch(c) for c in conflicted):
             git.run(['rebase', '--abort'], root, check=False)
-            raise SyncError('Concurrent remote changes conflict with local commits in: ' +
-                            (', '.join(conflicted) or 'unknown paths') +
-                            '. Local commits are kept. Re-read the other checkpoint and write a --merge-parent '
-                            'checkpoint (see references/recovery.md); never force-push.')
+            try:
+                return regenerated + merge_remote(root, git, branch, ident)
+            except SyncError as e:
+                projects = sorted({m.group(1) for c in conflicted for m in [HEAD_FILE.fullmatch(c)] if m})
+                hint = ' '.join(f'progress_sync.py reconcile --project {x}' for x in projects) or 'inspect the conflict'
+                raise SyncError('Concurrent remote changes conflict with local commits in: ' +
+                                (', '.join(conflicted) or 'unknown paths') + f' ({e}). Local commits are kept. '
+                                f'Next: {hint}, then write a --merge-parent checkpoint and push again '
+                                '(references/recovery.md); never force-push.')
         for c in conflicted:
             if c != 'INDEX.md':
                 pdir = handoff.project_dir(root, '/'.join(c.split('/')[1:3]))
@@ -463,6 +536,69 @@ def push(root, git, projects, extra_paths=(), message='', dry_run=False, max_fil
     if info['origin_url_has_credentials']:
         result['warning'] = 'origin URL embeds credentials (redacted); switch to a clean URL plus GH_TOKEN'
     return result
+
+
+def _state_diff(ours, theirs):
+    def key(x):
+        return x['id'] if isinstance(x, dict) and x.get('id') else json.dumps(x, ensure_ascii=False, sort_keys=True)[:120]
+    out = {}
+    for k in sorted(set(ours) | set(theirs)):
+        a, b = ours.get(k), theirs.get(k)
+        if a == b:
+            continue
+        if isinstance(a, list) and isinstance(b, list):
+            ka, kb = {key(x) for x in a}, {key(x) for x in b}
+            out[k] = {'only_theirs': sorted(kb - ka)[:20], 'only_ours': sorted(ka - kb)[:20]}
+        elif isinstance(a, dict) and isinstance(b, dict):
+            out[k] = {'keys_differ': sorted(x for x in set(a) | set(b) if a.get(x) != b.get(x))}
+        else:
+            out[k] = {'ours': a, 'theirs': b}
+    return out
+
+
+def reconcile(root, git, project, remote_url=None):
+    """Same project advanced in two sessions: copy the other side's checkpoint files (immutable,
+    verified) into the working tree without touching HEAD.json, and report both states."""
+    root = Path(root).resolve()
+    info = repo_info(root, git, remote_url)
+    branch = info['branch']
+    git.run(['fetch', '--quiet', 'origin', branch], root)
+    remote_ref, rel = f'refs/remotes/origin/{branch}', f'projects/{project}'
+    pdir = handoff.project_dir(root, project)
+    theirs_head = show_bytes(git, root, f'{remote_ref}:{rel}/HEAD.json')
+    if theirs_head is None:
+        return {'status': 'REMOTE_HAS_NO_PROJECT', 'note': 'nothing to reconcile; push creates it'}
+    t = json.loads(theirs_head)['checkpoint_id']
+    o_head, o_cp = handoff.checked_head(pdir)
+    o = o_head['checkpoint_id']
+    if o == t:
+        return {'status': 'IN_SYNC', 'checkpoint_id': o}
+    copied = []
+    listing = git.out(['ls-tree', '--name-only', f'{remote_ref}:{rel}/checkpoints/'], root, check=False).splitlines()
+    for name in listing:
+        target = pdir / 'checkpoints' / name
+        if name.endswith('.json') and not target.exists():
+            handoff.atomic(target, show_bytes(git, root, f'{remote_ref}:{rel}/checkpoints/{name}'))
+            copied.append(name[:-5])
+    t_cp = handoff.load(pdir / 'checkpoints' / f'{t}.json')
+    handoff.walk_chain(pdir, t_cp)  # their chain must verify (hashes, identity, revisions)
+    if descends(pdir, o, t):
+        return {'status': 'LOCAL_CONTAINS_REMOTE', 'ours': o, 'theirs': t, 'copied': copied,
+                'next': f'push: HEAD.json resolves to {o} automatically'}
+    if descends(pdir, t, o):
+        return {'status': 'REMOTE_AHEAD', 'ours': o, 'theirs': t, 'copied': copied, 'next': 'progress_sync.py pull'}
+    ours_anc = set(handoff.walk_chain(pdir, o_cp)[0])
+    base = next((c['checkpoint_id'] for c in sorted(handoff.walk_chain(pdir, t_cp)[0].values(),
+                 key=lambda c: -c['revision']) if c['checkpoint_id'] in ours_anc), None)
+    brief = lambda cp: {'checkpoint_id': cp['checkpoint_id'], 'revision': cp['revision'],
+                        'updated_at': cp.get('updated_at'), 'note': cp.get('note')}
+    return {'status': 'DIVERGED', 'ours': brief(o_cp), 'theirs': brief(t_cp), 'common_ancestor': base,
+            'copied_checkpoints': copied, 'differences': _state_diff(o_cp['state'], t_cp['state']),
+            'next': [f'handoff.py state --project {project} > /tmp/merged.json   # start from ours',
+                     f'# add what only theirs has (read it with: python3 -c "import json;print(json.load(open(\'{pdir}/checkpoints/{t}.json\'))[\'state\'])")',
+                     f"handoff.py checkpoint --project {project} --expected {o} --merge-parent {t} --state /tmp/merged.json "
+                     "--note '合并两个会话的并行进度（说明取舍与证据）'",
+                     f'progress_sync.py push --project {project} -m "{project}: merge parallel checkpoints"']}
 
 
 def pull(root, git, remote_url=None):
@@ -603,6 +739,8 @@ def main(argv=None):
     s.add_argument('--fetch', action='store_true')
     s.add_argument('--project', action='append')
     sub.add_parser('doctor')
+    rc = sub.add_parser('reconcile')
+    rc.add_argument('--project', required=True)
     sub.add_parser('pull')
     v = sub.add_parser('save')
     v.add_argument('--project', required=True)
@@ -627,6 +765,8 @@ def main(argv=None):
             result = clone(git, a.dest or a.root, a.repo, a.url, a.depth)
         elif a.command == 'status':
             result = status(a.root, git, a.fetch, a.project, a.remote_url)
+        elif a.command == 'reconcile':
+            result = reconcile(a.root, git, a.project, a.remote_url)
         elif a.command == 'pull':
             result = pull(a.root, git, a.remote_url)
         elif a.command == 'doctor':

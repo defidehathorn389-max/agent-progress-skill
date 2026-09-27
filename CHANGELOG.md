@@ -1,5 +1,13 @@
 # 变更记录
 
+## v2.2.0 — 2026-09-27
+
+- **同一项目在两个会话中分叉时，可以恢复了**：以前 `push` 总是 rebase，第一个本地提交就会在 `HEAD.json` 上冲突，即使已经写好了双亲合并检查点也推不上去，文档里的恢复流程实际走不通。现在：`reconcile --project P` 复制对方的检查点（校验后，不改 HEAD），列出双方状态、共同祖先和逐字段差异；写好 `--merge-parent` 检查点后，`push`/`pull` 在 rebase 无法重放时自动改用 merge，`HEAD.json` 只会解析为能追溯到另一方的检查点，合并后的链校验通过才提交。
+- `handoff.py compact`：先预览、再执行的状态精简（领域细节不丢失地移到 context；修剪旧的 completed、被取代的决定、未引用的证据和 `sync.memory`；可选 `--externalize-artifacts`，把产物列表放进 SHA256 固定的清单文件）；写入 `context.compacted_from`。在一个真实的 51 KB 状态上预演，缩小到 31.6 KB，提示全部消除。
+- `handoff.py log`：检查点时间线；`resume` 增加“之前的记录”（最近 5 次，合并检查点有标注）。
+- INDEX 为未完成的项目显示 ⏳ 等待事项（`handoff.waiting_for`）。
+- 新增 4 项端到端测试（合计 61 项），包括 分叉 → reconcile → 合并检查点 → push → 另一端 pull 并校验。
+
 ## v2.1.0 — 2026-09-27
 
 - **抗快照丢失**：有些平台的工作区快照不保存 `.git/config`，恢复后 `origin` 和提交身份都会丢失，fetch/push 随之失败。现在所有同步命令会从 `LOCATION.json` 的 `progress_remote_url`（或 `--remote-url`）自动补回 `origin`，并以最后一次提交的作者作为提交身份。

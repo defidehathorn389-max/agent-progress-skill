@@ -7,12 +7,12 @@
 - 本地锁无法替代跨机器协调。跨会话并发由 Git 处理：`progress_sync.py push` 会先 fetch，再把本地提交 rebase 到远端之上。
   - 冲突只落在派生视图（`INDEX.md`、`CURRENT.md`）时，工具会根据合并后的 HEAD 自动重新生成视图并继续。
   - 冲突涉及 `HEAD.json`、检查点或其他文件时，工具会中止 rebase，保留本地提交，并报告冲突路径。**绝不强推。**
-- 同一项目真正分叉（两边各有新检查点）时：
-  1. `git pull --no-rebase`，或先 fetch 再 merge，让两边的检查点文件都进入工作区。这些文件名不同，不会冲突；冲突只会出现在 `HEAD.json` 和派生视图上，先暂时保留任意一边。
-  2. 分别 `read` 两个检查点，核对内容，合并用户意图与实际进度。
-  3. `handoff.py checkpoint --project P --expected <当前HEAD> --merge-parent <另一个检查点ID> --state 合并后的状态 --note '合并原因及证据'`，生成双亲检查点。
-  4. `rebuild`，然后 `push`。
-  不要随便选一边，也不要假造完成状态。
+- 同一项目真正分叉（两个会话各自写了新检查点）时，`push` 会拒绝并提示 `reconcile`：
+  1. `progress_sync.py reconcile --project P`：把对方的检查点文件（不可变，已校验）复制到本地，不改 `HEAD.json`；输出双方的检查点、共同祖先，以及各字段的差异（`only_theirs` / `only_ours`）。
+  2. 分别核对两边，合并用户意图与实际进度：从 `handoff.py state` 导出己方状态，补上只有对方有的内容，写到 `/tmp/merged.json`。
+  3. `handoff.py checkpoint --project P --expected <己方HEAD> --merge-parent <对方HEAD> --state /tmp/merged.json --note '合并原因及证据'`，生成双亲检查点。
+  4. `progress_sync.py push --project P`：rebase 无法重放时，工具自动改用 merge；`HEAD.json` 只会被解析为能追溯到另一方的那个检查点（即合并检查点），派生视图重新生成，合并后的链校验通过才提交。
+  不要随便选一边，也不要假造完成状态，绝不强推。
 
 ## 崩溃与残留
 

@@ -31,10 +31,13 @@ python3 $S/handoff.py checkpoint --project research/example --expected NEW --sta
 python3 $S/handoff.py update --project research/example --expected <HEAD> --patch templates/patch.example.json --note '…' --dry-run
 python3 $S/handoff.py validate [--deep] [--verify-local --workspace DIR]
 python3 $S/handoff.py rebuild
+python3 $S/handoff.py log     --project research/example -n 20
+python3 $S/handoff.py compact --project research/example --expected <HEAD> --dry-run [--externalize-artifacts]
 python3 $S/handoff.py new    --project research/example --title '示例' --goal '…' --next-action '…'
 python3 $S/progress_sync.py --token-file /tmp/.gh_token clone --repo OWNER/agent-progress   # 可重复运行
 python3 $S/progress_sync.py --token-file /tmp/.gh_token doctor
 python3 $S/progress_sync.py --token-file /tmp/.gh_token pull
+python3 $S/progress_sync.py --token-file /tmp/.gh_token reconcile --project research/example   # 同一项目两边都有新检查点时
 python3 $S/progress_sync.py --token-file /tmp/.gh_token save --project research/example --expected <HEAD> --patch /tmp/patch.json --note '…'
 python3 $S/progress_sync.py --token-file /tmp/.gh_token status --fetch
 python3 $S/progress_sync.py --token-file /tmp/.gh_token push --project research/example -m 'research/example: …'

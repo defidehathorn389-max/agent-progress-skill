@@ -77,7 +77,7 @@ python3 $S/progress_sync.py --token-file $T save --project <方向>/<项目ID> -
 - `pending` 每项写 `id / action / blocked_by / done_when`；`next_actions` 写具体动作，不写“继续优化”。
 - `sync` 只记写入时已知的外部状态（如素材库提交）。**检查点记录不了自己的推送结果**：本检查点是否已同步，一律以 `progress_sync.py status --fetch` 为准，不再维护 `sync.memory`。
 - 旧 TTS 音色 ID、进程 ID、端口、会话 ID、配额和隧道都会失效：写明时间和作用域，优先复用已批准的实际产物。
-- 状态超过 48 KiB 会提示，超过 64 KiB 会被拒绝。此时写一个精简检查点，只留活动目标、约束、未完成、近期决定和必要证据，并在 `context.compacted_from` 写父检查点 ID。父检查点本身就是不可变的完整归档，不需要另存副本。
+- 状态超过 48 KiB 会提示，超过 64 KiB 会被拒绝。此时用 `handoff.py compact --project P --expected <HEAD> --dry-run` 查看精简方案，确认后去掉 `--dry-run` 执行。它会把领域细节移进 `context`、修剪旧历史，产物过多时加 `--externalize-artifacts`，并写入 `context.compacted_from`。父检查点本身就是不可变的完整归档，不需要另存副本。
 
 ## 5. 回复结束前（收尾协议）
 
@@ -90,7 +90,7 @@ python3 $S/progress_sync.py --token-file $T save --project <方向>/<项目ID> -
 
 | 场景 | 文档 |
 |---|---|
-| 并发/分叉、`--merge-parent`、锁残留、孤立检查点、稀疏恢复、跨库 expected 用错 | [references/recovery.md](references/recovery.md) |
+| 并发/分叉（`reconcile` → `--merge-parent` → `push`）、锁残留、孤立检查点、稀疏恢复、跨库 expected 用错 | [references/recovery.md](references/recovery.md) |
 | 同步原理、只能用 API 的环境、旧回执、存储上限、部分工作区 | [references/sync.md](references/sync.md) |
 | 字段规范、补丁规范、状态值、提示含义 | [references/state-schema.md](references/state-schema.md) |
 | 离线便携包、安全解压 | [references/portable-package.md](references/portable-package.md) |
@@ -101,6 +101,8 @@ python3 $S/progress_sync.py --token-file $T save --project <方向>/<项目ID> -
 python3 $S/handoff.py validate [--project P] [--deep] [--verify-local --workspace DIR]
 python3 $S/handoff.py rebuild                       # 只重建派生视图，不回滚 HEAD
 python3 $S/handoff.py new --project D/P --title … --goal … --next-action …   # 新项目
-python3 $S/progress_sync.py --token-file $T doctor | pull | status --fetch
+python3 $S/handoff.py log --project D/P -n 20          # 历史时间线（resume 里已附最近 5 次）
+python3 $S/handoff.py compact --project D/P --expected <HEAD> --dry-run   # 状态过大时
+python3 $S/progress_sync.py --token-file $T doctor | pull | status --fetch | reconcile --project D/P
 python3 -m unittest discover -s /home/user/agent-progress-skill/tests
 ```

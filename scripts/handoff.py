@@ -16,6 +16,9 @@ Commands (every command accepts --root; default $AGENT_PROGRESS_ROOT or /home/us
   new        --project D/P --title T --goal G [--status S] [--first-action A] [--next-action X ...] [--related D/P ...]
   validate   [--project D/P] [--deep] [--verify-local --workspace DIR]
   rebuild                      regenerate every CURRENT.md and INDEX.md
+  log        --project D/P [-n N]            recent checkpoints (revision, time, note), newest first
+  compact    --project D/P --expected ID [--keep-completed N] [--keep-evidence N] [--externalize-artifacts] [--dry-run]
+                               shrink the working state; the parent checkpoint stays the full archive
 """
 import argparse
 import copy
@@ -478,8 +481,11 @@ def index_bytes(root):
         h, cp = checked_head(p)
         ident = project_id(p)
         link = p.relative_to(Path(root)).as_posix() + '/CURRENT.md'
+        waiting = cp['state']['handoff'].get('waiting_for')
         rows[ident] = (f"- [{cp['state']['title']}]({link}) — `{ident}` — **{cp['state']['status']}** — "
-                       f"`{h['checkpoint_id']}` — {str(cp.get('updated_at', ''))[:10]}")
+                       f"`{h['checkpoint_id']}` — {str(cp.get('updated_at', ''))[:10]}" +
+                       (f" — ⏳ {_inline(waiting)[:48]}" if isinstance(waiting, str) and waiting.strip()
+                        and cp['state']['status'] != 'COMPLETED' else ''))
     lines = ['# 跨模型进度索引', '',
              '先读 GLOBAL.md 与 LOCATION.json，只打开相关方向。接手某项目：'
              '`python3 agent-progress-skill/scripts/handoff.py resume --project <方向>/<项目ID>`。',
@@ -649,6 +655,88 @@ def apply_patch(state, patch):
     return s
 
 
+def history(seen, n=5):
+    """Newest-first checkpoint summaries from walk_chain's `seen` map."""
+    cps = sorted(seen.values(), key=lambda c: (c['revision'], str(c.get('updated_at', ''))), reverse=True)[:n]
+    return [{'revision': c['revision'], 'checkpoint_id': c['checkpoint_id'], 'updated_at': c.get('updated_at'),
+             'note': c.get('note', ''), 'parents': len(c.get('parents', []))} for c in cps]
+
+
+CORE_HANDOFF_KEYS = ('first_action', 'running_operations', 'waiting_for', 'current_request_type', 'user_question',
+                     'last_actor')
+
+
+def compact_state(state, parent_id, keep_completed=20, keep_evidence=20, manifest=None):
+    """Plan a smaller working state. Lossless moves plus trimming of history that the immutable
+    parent checkpoint keeps in full (recorded in context.compacted_from). Returns (state, summary)."""
+    s = copy.deepcopy(state)
+    summary = {}
+    extras = {k: v for k, v in s['handoff'].items() if k not in CORE_HANDOFF_KEYS}
+    if extras:
+        s.setdefault('context', {}).setdefault('handoff_details', {}).update(extras)
+        for k in extras:
+            del s['handoff'][k]
+        summary['handoff_keys_moved_to_context'] = sorted(extras)
+    if len(s['completed']) > keep_completed:
+        summary['completed_trimmed'] = len(s['completed']) - keep_completed
+        s['completed'] = s['completed'][-keep_completed:]
+    superseded = {d['supersedes'] for d in s['decisions'] if isinstance(d, dict) and isinstance(d.get('supersedes'), str)}
+    old = [d['id'] for d in s['decisions'] if isinstance(d, dict) and d.get('id') in superseded]
+    if old:
+        s['decisions'] = [d for d in s['decisions'] if not (isinstance(d, dict) and d.get('id') in old)]
+        summary['superseded_decisions_trimmed'] = old
+    rest = dump({k: v for k, v in s.items() if k != 'evidence'}).decode()
+    tail = {e.get('id') for e in s['evidence'][-keep_evidence:] if isinstance(e, dict)}
+    kept = [e for e in s['evidence'] if isinstance(e, dict) and (e.get('id') in tail or f'"{e.get("id")}"' in rest)]
+    if len(kept) < len(s['evidence']):
+        summary['unreferenced_evidence_trimmed'] = len(s['evidence']) - len(kept)
+        s['evidence'] = kept
+    if manifest:
+        summary['artifacts_externalized'] = len(s['artifacts'])
+        s['artifacts'] = [manifest]
+    if isinstance(s.get('sync'), dict) and 'memory' in s['sync']:
+        del s['sync']['memory']
+        summary['sync_memory_removed'] = True
+    if summary:
+        s.setdefault('context', {})['compacted_from'] = parent_id
+        s['context']['compaction'] = {k: (v if not isinstance(v, list) else len(v)) for k, v in summary.items()}
+    return s, summary
+
+
+def field_sizes(state):
+    return dict(sorted(((k, len(dump(v))) for k, v in state.items()), key=lambda kv: -kv[1]))
+
+
+def compact(root, project, expected, keep_completed=20, keep_evidence=20, note=None, dry_run=False,
+            externalize_artifacts=False):
+    p = project_dir(root, project)
+    h, cp = checked_head(p)
+    chain(p, cp)
+    manifest = data = None
+    if externalize_artifacts and len(cp['state']['artifacts']) > 1:
+        rel = f"projects/{project}/evidence/compaction/artifacts-{h['checkpoint_id']}.json"
+        data = dump({'project': project, 'source_checkpoint': h['checkpoint_id'], 'artifacts': cp['state']['artifacts']})
+        manifest = {'id': 'artifacts-manifest', 'role': f"产物清单（{len(cp['state']['artifacts'])} 项，完整列表见该文件）",
+                    'availability': 'LOCAL_AND_REMOTE', 'local_path': f'{Path(root).resolve().name}/{rel}',
+                    'sha256': digest(data), 'remote': {'repository': 'agent-progress（本进度库）', 'path': rel}}
+    new, summary = compact_state(cp['state'], h['checkpoint_id'], keep_completed, keep_evidence, manifest)
+    if not summary:
+        raise HandoffError('Nothing to compact')
+    validate_state(new)
+    report = {'before_bytes': len(dump(cp['state'])), 'after_bytes': len(dump(new)), 'summary': summary,
+              'handoff_keys_before': len(cp['state']['handoff']), 'handoff_keys_after': len(new['handoff']),
+              'largest_fields_before': dict(list(field_sizes(cp['state']).items())[:6]), 'lint_after': lint_state(new)}
+    if manifest:
+        report['artifacts_manifest'] = manifest['remote']['path']
+    if dry_run:
+        return dict(report, dry_run=True)
+    if manifest:  # write the manifest first; the checkpoint pins it by SHA256
+        atomic(Path(root) / manifest['remote']['path'], data)
+    written = checkpoint(root, project, new, expected,
+                         note or f"精简工作状态（完整历史见父检查点 {h['checkpoint_id']}）")
+    return dict(written, **report)
+
+
 TEMPLATE_PATH = Path(__file__).resolve().parents[1] / 'templates' / 'state.json'
 
 
@@ -760,6 +848,11 @@ def resume_text(root, project):
     lines += block('最近决定', 'decisions', s['decisions'], limit=8, newest=True)
     lines += block('最近完成', 'completed', s['completed'], limit=5, newest=True)
     lines += block('风险', 'risks', s['risks'], limit=5)
+    recent = history(seen, 6)[1:]
+    if recent:
+        lines += ['', f'## 之前的记录（最近 {len(recent)} 次；完整历史用 log）'] + [
+            f"- rev {r['revision']} · {str(r['updated_at'])[:16].replace('T', ' ')} · {_inline(r['note'])[:120]}"
+            + (' ·（合并检查点）' if r['parents'] > 1 else '') for r in recent]
     lines += ['', f"产物 {len(s['artifacts'])} 项、证据 {len(s['evidence'])} 项：见 CURRENT.md；"
                   '本地素材核验用 validate --verify-local。']
     lint = lint_state(s)
@@ -789,6 +882,18 @@ def main(argv=None):
         c.add_argument('--project', required=True)
     sub.choices['read'].add_argument('--allow-missing-parents', action='store_true',
                                      help='report locally missing ancestors instead of failing (reading only)')
+    lg = sub.add_parser('log', help='recent checkpoints, newest first')
+    lg.add_argument('--project', required=True)
+    lg.add_argument('-n', type=int, default=20)
+    cm = sub.add_parser('compact', help='shrink the working state (parent checkpoint stays the full archive)')
+    cm.add_argument('--project', required=True)
+    cm.add_argument('--expected', required=True)
+    cm.add_argument('--keep-completed', type=int, default=20)
+    cm.add_argument('--keep-evidence', type=int, default=20)
+    cm.add_argument('--note')
+    cm.add_argument('--dry-run', action='store_true')
+    cm.add_argument('--externalize-artifacts', action='store_true',
+                    help='move the artifact list into a SHA256-pinned manifest file under the project evidence/')
     n = sub.add_parser('new', help='create a project from templates/state.json (expected NEW)')
     n.add_argument('--project', required=True)
     n.add_argument('--title', required=True)
@@ -836,6 +941,16 @@ def main(argv=None):
             state = load_input(a.state)
             h = checkpoint(a.root, a.project, state, a.expected, a.note, a.merge_parent)
             result = dict(h, lint=lint_state(state))
+        elif a.command == 'log':
+            p = project_dir(a.root, a.project)
+            _, cp = checked_head(p)
+            seen, missing, _ = walk_chain(p, cp, allow_missing=True)
+            result = history(seen, a.n)
+            if missing:
+                print(f'warning: {len(missing)} ancestor checkpoint(s) missing locally', file=sys.stderr)
+        elif a.command == 'compact':
+            result = compact(a.root, a.project, a.expected, a.keep_completed, a.keep_evidence, a.note, a.dry_run,
+                             a.externalize_artifacts)
         elif a.command == 'new':
             state = new_state(a.title, a.goal, a.status, a.first_action, a.related, a.next_action)
             h = checkpoint(a.root, a.project, state, 'NEW', a.note)

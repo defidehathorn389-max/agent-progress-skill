@@ -68,6 +68,15 @@ agent-progress/
 | 使用已弃用的状态 / `sync.memory` | 同步状态改用 `progress_sync.py status` 查看 |
 | pending 项缺 id 或 done_when | 补完成判据 |
 
+## 精简（`handoff.py compact`）
+
+先 `--dry-run` 查看前后大小、各字段体积和精简后的提示，再去掉 `--dry-run` 执行（需要 `--expected`）：
+
+- 不丢信息的移动：`handoff` 里核心键以外的键移到 `context.handoff_details`；
+- 只从工作状态里修剪（父检查点仍保留完整内容）：`completed` 只保留最近 N 项（`--keep-completed`，默认 20）；删去已被取代（`supersedes`）的决定；证据只保留仍被引用的，加上最近 N 项（`--keep-evidence`）；去掉 `sync.memory`；
+- `--externalize-artifacts`：把整个产物列表写进 `projects/<p>/evidence/compaction/artifacts-<父ID>.json`，状态里只留一条用 SHA256 固定的清单项（`--verify-local` 可核对）；
+- 写入 `context.compacted_from`（父检查点 ID）和 `context.compaction`（修剪统计）。父检查点本身就是完整归档。
+
 ## 兼容性
 
 v2 读取 v1 的全部检查点，无需迁移（schema_version 仍为 1）。v2 生成的 `CURRENT.md` 更易读，旧仓库首次使用时运行一次 `rebuild` 即可。只有在状态里使用 `context` 时，才需要 v2 工具来校验。
