@@ -17,6 +17,8 @@ Commands (every command accepts --root; default $AGENT_PROGRESS_ROOT or /home/us
   validate   [--project D/P] [--deep] [--verify-local --workspace DIR]
   rebuild                      regenerate every CURRENT.md and INDEX.md
   log        --project D/P [-n N]            recent checkpoints (revision, time, note), newest first
+  find       QUERY [-n N]                    which project does the user mean? ranked search over all projects
+  recent     [-n N]                          latest checkpoints across all projects (what happened lately)
   compact    --project D/P --expected ID [--keep-completed N] [--keep-evidence N] [--externalize-artifacts] [--dry-run]
                                shrink the working state; the parent checkpoint stays the full archive
 """
@@ -491,6 +493,19 @@ def index_bytes(root):
              '`python3 agent-progress-skill/scripts/handoff.py resume --project <方向>/<项目ID>`。',
              'CURRENT.md 是派生视图，以校验后的 HEAD 检查点为准；同步状态用 `progress_sync.py status` 查看。', '',
              '实际项目进度默认私有。各项目素材库的同步不等于本进度库已同步。', '']
+    active = []
+    for p in all_projects(root):
+        try:
+            h, cp = checked_head(p)
+        except HandoffError:
+            continue
+        st = cp['state']
+        if st['status'] != 'COMPLETED':
+            w = st['handoff'].get('waiting_for')
+            active.append(f"- `{project_id(p)}` · **{st['status']}** · {st['title']}" +
+                          (f" · ⏳ {_inline(w)[:48]}" if isinstance(w, str) and w.strip() else ''))
+    if active:
+        lines += [f'## 进行中（{len(active)}）', ''] + sorted(active) + ['', '## 全部项目（按方向）', '']
     domain = None
     for ident, line in sorted(rows.items()):
         current = ident.split('/')[0]
@@ -662,6 +677,53 @@ def history(seen, n=5):
              'note': c.get('note', ''), 'parents': len(c.get('parents', []))} for c in cps]
 
 
+def _project_views(root):
+    """(project id, HEAD checkpoint, reachable checkpoints) for every loadable project."""
+    for p in all_projects(root):
+        try:
+            _, cp = checked_head(p)
+            seen, _, _ = walk_chain(p, cp, allow_missing=True)
+        except (HandoffError, OSError, ValueError, KeyError):
+            continue
+        yield project_id(p), cp, seen
+
+
+def find(root, query, n=10):
+    """Rank projects for a vague user reference ("the city documentary from last time"). All terms must match."""
+    terms = [t.lower() for t in query.split() if t.strip()]
+    if not terms:
+        raise HandoffError('Empty query')
+    weights = (('title', 5), ('goal', 3), ('context', 2), ('decisions', 1), ('constraints', 1), ('pending', 1),
+               ('notes', 1), ('project', 4))
+    out = []
+    for ident, cp, seen in _project_views(root):
+        s = cp['state']
+        notes = ' '.join(c.get('note', '') for c in sorted(seen.values(), key=lambda c: -c['revision'])[:30])
+        fields = {'title': s['title'], 'goal': s['goal'], 'project': ident, 'notes': notes,
+                  **{k: dump(s.get(k, '')).decode() for k in ('context', 'decisions', 'constraints', 'pending')}}
+        score, matched = 0, set()
+        for t in terms:
+            hit = [(f, w) for f, w in weights if t in fields[f].lower()]
+            if not hit:
+                score = 0
+                break
+            score += sum(w for _, w in hit)
+            matched.update(f for f, _ in hit)
+        if score:
+            out.append({'project': ident, 'title': s['title'], 'status': s['status'], 'score': score,
+                        'matched': sorted(matched), 'head': cp['checkpoint_id'], 'updated_at': cp.get('updated_at')})
+    out.sort(key=lambda x: str(x['updated_at']), reverse=True)  # ties: most recently updated first
+    return sorted(out, key=lambda x: -x['score'])[:n]            # stable: keeps recency order within a score
+
+
+def recent(root, n=10):
+    """Newest checkpoints across all projects."""
+    rows = [{'updated_at': c.get('updated_at'), 'project': ident, 'revision': c['revision'],
+             'checkpoint_id': c['checkpoint_id'], 'note': c.get('note', '')}
+            for ident, _, seen in _project_views(root) for c in seen.values()]
+    return sorted(rows, key=lambda r: (str(r['updated_at']), r['revision']), reverse=True)[:n]
+
+
 CORE_HANDOFF_KEYS = ('first_action', 'running_operations', 'waiting_for', 'current_request_type', 'user_question',
                      'last_actor')
 
@@ -831,6 +893,21 @@ def resume_text(root, project):
         if hd.get(k):
             lines.append(f'- {k}: {_inline(hd[k])}')
     lines += ['', '## 目标', _inline(s['goal'])]
+    ctx = s.get('context') or {}
+    if ctx:
+        lines += ['', '## 项目上下文（context；完整值用 state 查看）']
+        if ctx.get('compacted_from'):
+            lines.append(f"- 已精简：更早的完整历史见父检查点 `{ctx['compacted_from']}`")
+        for k, v in ctx.items():
+            if k in ('compacted_from', 'compaction'):
+                continue
+            if isinstance(v, dict):
+                names = list(v)
+                lines.append(f'- {k}：{len(names)} 项 — ' + '、'.join(names[:15]) + (f' …另有 {len(names) - 15} 项' if len(names) > 15 else ''))
+            elif isinstance(v, list):
+                lines.append(f'- {k}：列表 {len(v)} 项')
+            else:
+                lines.append(f'- {k}：{_inline(v)[:100]}')
 
     def block(title, key, items, limit=None, newest=False):
         chosen = items[-limit:] if (limit and newest) else (items[:limit] if limit else items)
@@ -882,6 +959,11 @@ def main(argv=None):
         c.add_argument('--project', required=True)
     sub.choices['read'].add_argument('--allow-missing-parents', action='store_true',
                                      help='report locally missing ancestors instead of failing (reading only)')
+    fd = sub.add_parser('find', help='rank projects matching a vague reference')
+    fd.add_argument('query')
+    fd.add_argument('-n', type=int, default=10)
+    rc = sub.add_parser('recent', help='latest checkpoints across all projects')
+    rc.add_argument('-n', type=int, default=10)
     lg = sub.add_parser('log', help='recent checkpoints, newest first')
     lg.add_argument('--project', required=True)
     lg.add_argument('-n', type=int, default=20)
@@ -941,6 +1023,10 @@ def main(argv=None):
             state = load_input(a.state)
             h = checkpoint(a.root, a.project, state, a.expected, a.note, a.merge_parent)
             result = dict(h, lint=lint_state(state))
+        elif a.command == 'find':
+            result = find(a.root, a.query, a.n)
+        elif a.command == 'recent':
+            result = recent(a.root, a.n)
         elif a.command == 'log':
             p = project_dir(a.root, a.project)
             _, cp = checked_head(p)

@@ -34,7 +34,7 @@ agent-progress/
 | sync | 对象 | ✓ | 只写“写入时已知”的外部状态，例如素材库提交；本检查点的推送状态不写在这里 |
 | handoff | 对象 | ✓ | `first_action`（必填，非空）、`running_operations`（必填数组）；可选 `waiting_for`、`current_request_type`、`user_question`、`last_actor` |
 | related_projects | 数组 | ✓ | `domain/id` 字符串 |
-| context | 对象 |  | 可选：领域细节（当前集数、工作文件、审批标志等） |
+| context | 对象 |  | 可选：领域细节（当前集数、工作文件、审批标志等）；`aliases` 列出用户对项目的常用叫法，供 `find` 匹配 |
 
 禁止出现的字段名（任意层级）：password、passphrase、token、secret、api_key、access_token、authorization_header、private_key。字符串会扫描常见密钥格式，包括 GitHub、AWS、私钥、Bearer、Anthropic、OpenAI project、Google API、Slack、GitLab。state 序列化后不得超过 64 KiB。
 

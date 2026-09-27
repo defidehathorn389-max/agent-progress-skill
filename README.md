@@ -32,6 +32,8 @@ python3 $S/handoff.py update --project research/example --expected <HEAD> --patc
 python3 $S/handoff.py validate [--deep] [--verify-local --workspace DIR]
 python3 $S/handoff.py rebuild
 python3 $S/handoff.py log     --project research/example -n 20
+python3 $S/handoff.py find    '关键词'        # 用户说“上次那个……”时定位项目
+python3 $S/handoff.py recent  -n 10           # 所有项目最近的记录
 python3 $S/handoff.py compact --project research/example --expected <HEAD> --dry-run [--externalize-artifacts]
 python3 $S/handoff.py new    --project research/example --title '示例' --goal '…' --next-action '…'
 python3 $S/progress_sync.py --token-file /tmp/.gh_token clone --repo OWNER/agent-progress   # 可重复运行

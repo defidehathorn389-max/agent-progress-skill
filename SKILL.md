@@ -42,7 +42,7 @@ python3 $S/progress_sync.py --token-file $T save --project <方向>/<项目ID> -
 ## 2. 接手（读取门禁）
 
 1. 读本文件，再读进度库 `GLOBAL.md`、`LOCATION.json`、`INDEX.md`。
-2. 按“方向/项目ID”选项目；主题不明或同名多项目时，只问必要的选择，不把全部历史当成一个任务。
+2. 按“方向/项目ID”选项目。用户没给 ID（例如“上次那个城市纪录片”）时，先用 `handoff.py find 关键词`（按相关度排序，同分时最近更新的在前）或 `handoff.py recent`（所有项目最近的记录）定位；仍不确定，才只问必要的选择。不要把全部历史当成一个任务。
 3. 先跑一次 `progress_sync.py doctor`（落后就先 `pull`），再运行 `handoff.py resume --project …`：校验 HEAD 指纹和父链，输出接手第一步、待办、约束、不要重复的错误、最近决定、运行中任务和提示。需要完整 JSON 时用 `read`。
 4. 核对素材：素材在本地时运行 `validate --project … --verify-local --workspace …`。新环境缺媒体不等于旧模型没完成；按记录的远端提交恢复后再核。
 5. **语义一致性**：交叉核对 title、goal、pending、next_actions、`handoff.first_action` 与最新有来源的 decisions。旧任务完成后，不得沿用它的“启动中”状态、会话路径或旧 voice_id。发现冲突就在新检查点里纠正并注明证据；证据不足时才问用户。
@@ -73,7 +73,7 @@ python3 $S/progress_sync.py --token-file $T save --project <方向>/<项目ID> -
 ## 4. 状态怎么写
 
 - `handoff` 只放接手必需的键：`first_action`（必填）、`running_operations`（必填）、`waiting_for`、`current_request_type`、`user_question`、`last_actor`。超过 15 个键会有提示。
-- `context`（可选对象）：本项目的领域细节，如当前集数、工作文件、审批标志。不要塞进 `handoff`。
+- `context`（可选对象）：本项目的领域细节，如当前集数、工作文件、审批标志，以及 `aliases`（用户对项目的常用叫法，`find` 会搜索）。不要塞进 `handoff`。`resume` 会列出 context 的键名。
 - `pending` 每项写 `id / action / blocked_by / done_when`；`next_actions` 写具体动作，不写“继续优化”。
 - `sync` 只记写入时已知的外部状态（如素材库提交）。**检查点记录不了自己的推送结果**：本检查点是否已同步，一律以 `progress_sync.py status --fetch` 为准，不再维护 `sync.memory`。
 - 旧 TTS 音色 ID、进程 ID、端口、会话 ID、配额和隧道都会失效：写明时间和作用域，优先复用已批准的实际产物。
@@ -102,6 +102,7 @@ python3 $S/handoff.py validate [--project P] [--deep] [--verify-local --workspac
 python3 $S/handoff.py rebuild                       # 只重建派生视图，不回滚 HEAD
 python3 $S/handoff.py new --project D/P --title … --goal … --next-action …   # 新项目
 python3 $S/handoff.py log --project D/P -n 20          # 历史时间线（resume 里已附最近 5 次）
+python3 $S/handoff.py find '关键词' | recent -n 10     # 用户没给项目 ID 时定位项目
 python3 $S/handoff.py compact --project D/P --expected <HEAD> --dry-run   # 状态过大时
 python3 $S/progress_sync.py --token-file $T doctor | pull | status --fetch | reconcile --project D/P
 python3 -m unittest discover -s /home/user/agent-progress-skill/tests
