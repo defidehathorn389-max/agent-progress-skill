@@ -1,5 +1,13 @@
 # 变更记录
 
+## v2.6.0 — 2026-09-27
+
+- `skills.py publish --dir <仓库> -m …`：发布任何 skill 仓库（包括把教训写进 skill）。公开仓库**强制**先做隐私扫描，命中私有词表就阻止发布；所有仓库都做凭据和大文件检查；不强推，用 ls-remote 核验；`origin` 丢失时从仓库的 LOCATION.json 自动补回。此前记忆协议只是要求“先扫描再推送”，没有工具强制执行。
+- 公开规则库自带 `LOCATION.json`：沙箱重启后它的 `origin` 也能自动修复（此前三次重启都要手工补）；`doctor` 同时报告 skill 克隆里未发布的改动。
+- `skills.py tag` / `add --tags`：给外部 skill 加中文关键词；`skills.py outdated`：逐文件比较缓存的外部 skill 与上游同一路径的最新版本，只有 skill 目录变了才提示更新，并给出更新命令。
+- 修复：`push_paths` 用 `.`（整个仓库）作为路径时，已跟踪文件的修改被误判为“范围之外”（测试发现）。
+- 新增 5 项测试。
+
 ## v2.5.1 — 2026-09-27
 
 - `skills.py add` 入库时统一去掉可执行位（SOURCE.json 记 `modes_normalized`）：工作区快照恢复文件时不保留权限位，原先会让已入库的脚本显示为“修改”、doctor 报未同步。脚本一律用 python3 / bash 显式调用。新增对应测试。

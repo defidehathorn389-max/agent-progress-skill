@@ -23,8 +23,12 @@ Commands:
          [--allow-warn --note WHY] [--replace]
   register-own --from DIR --repo OWNER/REPO [--path P] [--commit C] [--visibility public|private]
          [--name N] [--description D] [--tags a,b]
+  tag    --name N --tags a,b                  keywords (e.g. Chinese) for an external skill
+  outdated [--name N]                        compare cached external skills with upstream
   verify | index
   privacy-scan --path DIR [--progress-root R] [--term X ...]   check a public repo for private names
+  publish --dir REPO -m MESSAGE [--private] [--remote-url URL]  commit + push any skill repository:
+                                             blocking privacy scan for public repos, secret checks, verify
   sync   -m MESSAGE [--token-file F]
 """
 import argparse
@@ -204,7 +208,7 @@ def trust_for(root, repo):
 
 
 def add(root, src_dir, name, source_url, repo=None, commit=None, path=None, trust=None, license_=None,
-        allow_warn=False, replace=False, note=None):
+        allow_warn=False, replace=False, note=None, tags=(), clone_url=None):
     root, src = Path(root), Path(src_dir)
     if not NAME_RE.fullmatch(name or ''):
         raise SkillError('name must be a lowercase slug')
@@ -235,6 +239,7 @@ def add(root, src_dir, name, source_url, repo=None, commit=None, path=None, trus
             os.chmod(f, 0o644)
     source = {'name': name, 'source_url': source_url, 'repo': repo, 'commit': commit, 'path': path, 'trust': trust,
               'license': license_ or result['license'], 'fetched_at': now(), 'modes_normalized': True,
+              'tags': [t for t in tags if t], **({'clone_url': clone_url} if clone_url else {}),
               'description': result['description'] or '',
               'review': {'verdict': result['verdict'], 'reviewer': 'skills.py static review v1', 'reviewed_at': now(),
                          'hosts': result['hosts'], 'findings': result['findings'][:60],
@@ -281,7 +286,7 @@ def catalog(root):
                      'commit': e.get('commit'), 'visibility': e.get('visibility')})
     for f in sorted((root / 'external').glob('*/SOURCE.json')) if (root / 'external').exists() else []:
         e = json.loads(f.read_text(encoding='utf-8'))
-        rows.append({'name': e['name'], 'kind': 'external', 'description': e.get('description', ''), 'tags': [],
+        rows.append({'name': e['name'], 'kind': 'external', 'description': e.get('description', ''), 'tags': e.get('tags', []),
                      'location': f'external/{e["name"]}', 'source_url': e['source_url'], 'commit': e.get('commit'),
                      'trust': e['trust'], 'license': e['license'], 'verdict': e['review']['verdict']})
     return sorted(rows, key=lambda r: (r['kind'] != 'own', r['name']))
@@ -385,6 +390,71 @@ def privacy_scan(path, progress_root=None, terms=()):
     return {'clean': not hits, 'terms_checked': len(words), 'hits': hits[:200]}
 
 
+def tag(root, name, tags):
+    f = Path(root) / 'external' / name / 'SOURCE.json'
+    if not f.exists():
+        raise SkillError(f'no external skill named {name}')
+    e = json.loads(f.read_text(encoding='utf-8'))
+    e['tags'] = list(dict.fromkeys(list(e.get('tags', [])) + [t for t in tags if t]))
+    handoff.atomic(f, dump(e))
+    index(root)
+    return {'name': name, 'tags': e['tags']}
+
+
+def outdated(root, name=None, token=None):
+    """Compare cached external skills with the current upstream version of the same path."""
+    out = []
+    for f in sorted((Path(root) / 'external').glob('*/SOURCE.json')) if (Path(root) / 'external').exists() else []:
+        e = json.loads(f.read_text(encoding='utf-8'))
+        if name and e['name'] != name:
+            continue
+        if not (e.get('repo') or e.get('clone_url')):
+            out.append({'name': e['name'], 'status': 'unknown', 'reason': 'no repository recorded'})
+            continue
+        try:
+            latest = fetch(repo=e.get('repo') if not e.get('clone_url') else None, url=e.get('clone_url'),
+                           path=e.get('path'), token=token)
+        except Exception as err:  # noqa: BLE001 - report per skill, keep going
+            out.append({'name': e['name'], 'status': 'upstream_unreachable', 'reason': str(err)[:200]})
+            continue
+        now_files, old = file_hashes(latest['dir']), e.get('files', {})
+        changed = sorted(k for k in set(now_files) | set(old) if now_files.get(k) != old.get(k))
+        out.append({'name': e['name'], 'pinned_commit': e.get('commit'), 'upstream_commit': latest['commit'],
+                    'status': 'changed' if changed else 'up_to_date', 'changed_files': changed[:30],
+                    'update': (f"skills.py review {latest['dir']} && skills.py add --from {latest['dir']} --name {e['name']} "
+                               f"--source-url {latest['source_url']} --repo {e.get('repo') or ''} --commit {latest['commit']} "
+                               f"--path {e.get('path') or ''} --replace") if changed else None})
+    return out
+
+
+def publish(repo_dir, message, token=None, progress_root=None, private=None, remote_url=None):
+    """Commit + push a skill repository (e.g. when a lesson becomes a rule). Public repositories must
+    pass the privacy scan first; every repository gets the secret/size checks and ls-remote verification."""
+    import progress_sync as ps
+    repo_dir = Path(repo_dir).resolve()
+    if not (repo_dir / '.git').exists():
+        raise SkillError(f'not a git repository: {repo_dir}')
+    try:
+        loc = json.loads((repo_dir / 'LOCATION.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        loc = {}
+    if private is None:
+        private = str(loc.get('visibility', '')).lower() == 'private'
+    scan = None
+    if not private:
+        scan = privacy_scan(repo_dir, progress_root)
+        if not scan['clean']:
+            raise SkillError('privacy scan blocked publishing to a public repository: ' +
+                             '; '.join(f"{h['term']} in {h['file']}:{h['line'] or ''}" for h in scan['hits'][:8]))
+    git = ps.Git(token)
+    try:
+        result = ps.push_paths(repo_dir, git, ['.'], message, remote_url=remote_url)
+    finally:
+        git.close()
+    result['privacy_scan'] = 'skipped (private repository)' if private else f"clean ({scan['terms_checked']} terms)"
+    return result
+
+
 def sync(root, message, token=None):
     import progress_sync as ps
     git = ps.Git(token)
@@ -428,6 +498,21 @@ def main(argv=None):
     a_.add_argument('--allow-warn', action='store_true')
     a_.add_argument('--replace', action='store_true')
     a_.add_argument('--note', help='why the warnings are acceptable (stored in SOURCE.json)')
+    a_.add_argument('--tags', default='', help='comma separated keywords, e.g. Chinese terms')
+    a_.add_argument('--clone-url', help='non-GitHub clone URL used by outdated')
+    tg = sub.add_parser('tag')
+    tg.add_argument('--name', required=True)
+    tg.add_argument('--tags', required=True)
+    od = sub.add_parser('outdated')
+    od.add_argument('--name')
+    od.add_argument('--token-file', type=Path)
+    pb = sub.add_parser('publish')
+    pb.add_argument('--dir', type=Path, required=True)
+    pb.add_argument('-m', '--message', required=True)
+    pb.add_argument('--private', action='store_true', help='skip the privacy scan (private repository)')
+    pb.add_argument('--remote-url')
+    pb.add_argument('--progress-root', type=Path, default=Path(os.environ.get('AGENT_PROGRESS_ROOT') or '/home/user/agent-progress'))
+    pb.add_argument('--token-file', type=Path)
     o = sub.add_parser('register-own')
     o.add_argument('--from', dest='src', type=Path, required=True)
     o.add_argument('--repo', required=True)
@@ -457,7 +542,13 @@ def main(argv=None):
             result = review(a.dir)
         elif a.command == 'add':
             result = add(a.root, a.src, a.name, a.source_url, a.repo, a.commit, a.path, a.trust, a.license,
-                         a.allow_warn, a.replace, a.note)
+                         a.allow_warn, a.replace, a.note, [x.strip() for x in a.tags.split(',') if x.strip()], a.clone_url)
+        elif a.command == 'tag':
+            result = tag(a.root, a.name, [x.strip() for x in a.tags.split(',') if x.strip()])
+        elif a.command == 'outdated':
+            result = outdated(a.root, a.name, _token(a.token_file))
+        elif a.command == 'publish':
+            result = publish(a.dir, a.message, _token(a.token_file), a.progress_root, True if a.private else None, a.remote_url)
         elif a.command == 'register-own':
             result = register_own(a.root, a.src, a.repo, a.path, a.commit, a.visibility, a.name, a.description,
                                   [x.strip() for x in a.tags.split(',') if x.strip()])

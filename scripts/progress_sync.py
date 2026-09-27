@@ -175,7 +175,7 @@ def status_entries(root, git):
 
 
 def under(path, prefixes):
-    return any(path == p or path.startswith(p.rstrip('/') + '/') for p in prefixes)
+    return any(p in ('.', '', './') or path == p or path.startswith(p.rstrip('/') + '/') for p in prefixes)
 
 
 def show_bytes(git, root, spec):
@@ -856,10 +856,19 @@ def doctor(root, git, token_present, remote_url=None, skill_dir=None):
         except Exception as e:  # noqa: BLE001 - report, never crash the health check
             add(label, False, str(e)[:200], 'see references/memory.md or references/skills.md')
     if skill_dir:
+        repaired, sdirty = [], []
+        if (Path(skill_dir) / '.git').exists():
+            try:
+                repaired = ensure_origin(skill_dir, git)  # the skill repo carries its own LOCATION.json
+            except SyncError:
+                repaired = []
+            sdirty = [p_ for xy, p_ in status_entries(skill_dir, git) if xy != '??']
         local, remote, pinned, url = _skill_heads(git, skill_dir, root)
-        ok = bool(local) and (not remote or local == remote)
-        add('skill version', ok, f'local {local[:7] or "?"}, remote {remote[:7] or "?"}, LOCATION pin {pinned[:7] or "?"}',
-            f'update the skill clone: git -C {skill_dir} pull --ff-only {url} main (or re-clone)')
+        ok = bool(local) and (not remote or local == remote) and not sdirty
+        add('skill version', ok, f'local {local[:7] or "?"}, remote {remote[:7] or "?"}, LOCATION pin {pinned[:7] or "?"}' +
+            (f'; {len(sdirty)} uncommitted edit(s) in the skill clone' if sdirty else '') + ('; origin re-added' if repaired else ''),
+            'publish the edits (skills.py publish --dir SKILL_DIR -m ...) or update the clone: '
+            f'git -C {skill_dir} pull --ff-only {url} main')
     return {'ok': all(c['ok'] or c.get('advisory') for c in checks), 'checks': checks, 'checked_at': utcnow()}
 
 

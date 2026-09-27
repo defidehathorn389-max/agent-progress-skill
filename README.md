@@ -57,7 +57,7 @@ python3 -m unittest discover -s tests
 | `scripts/handoff.py` | 本地检查点：锁、expected-HEAD、不可变快照、父链校验（迭代实现，无深度上限）、补丁更新、接手简报、lint、派生视图。不联网 |
 | `scripts/progress_sync.py` | Git 同步：clone/doctor/pull/status/push/save；token 只在内存中使用；定向暂存；派生视图冲突自动重建；用 ls-remote 核验；快照丢失 `.git/config` 时自动修复 |
 | `scripts/memory.py` | 用户记忆（agent-memory）：偏好（明确/推断）、事实、踩坑教训（自动计数）、临时约定和对话摘要（会过期）、近期重点、自我进化记录；brief/search/expire/validate/sync |
-| `scripts/skills.py` | skill 总目录（agent-skills）：本地搜索、浅克隆下载、静态安全检查、来源与指纹入库、完整性校验、自有 skill 登记、公开仓库隐私扫描、sync |
+| `scripts/skills.py` | skill 总目录（agent-skills）：本地搜索、浅克隆下载、静态安全检查、来源与指纹入库、中文关键词、上游更新检查、完整性校验、自有 skill 登记、隐私扫描，以及发布任何 skill 仓库的 `publish`（公开仓库强制隐私扫描） |
 | `scripts/export_handoff.py` | 离线便携包（排除凭据和媒体，附清单） |
 | `scripts/credential_vault.py`、`session_github.py`、`sync_progress.py` | 可选的密文封装模式（旧流程，需要 `requests cryptography`） |
 | `templates/state.json`、`templates/patch.example.json` | 新项目模板、补丁示例 |

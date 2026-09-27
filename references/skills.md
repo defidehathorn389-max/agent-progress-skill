@@ -42,6 +42,21 @@
 
 `skills.py register-own --from <本地克隆> --repo OWNER/REPO [--visibility private] [--tags 视频,动画]`。没有 frontmatter 的 skill 用 `--name` 和 `--description` 补上。自己的 skill 更新后重新登记，以刷新提交号。
 
+## 更新与关键词
+
+- `skills.py outdated [--name N]`：把缓存的外部 skill 和上游同一路径的最新版本逐文件比较，结果是 `up_to_date`、`changed`（附变化的文件和更新命令）或 `upstream_unreachable`。只有 skill 自己的目录变了才算需要更新。需要更新时，照输出的命令重新 `review` 并 `add --replace`。
+- `skills.py tag --name N --tags 表格,排版`（或入库时 `add --tags`）：给英文说明的外部 skill 补中文关键词，让中文搜索也能找到。
+
+## 修改并发布 skill（包括把教训写进 skill）
+
+`skills.py publish --dir <skill 仓库> -m '说明'`：
+- 公开仓库（`LOCATION.json` 的 `visibility` 不是 `private`）先做隐私扫描，命中私有词表就**阻止发布**；
+- 所有仓库都做凭据格式、敏感文件名和超大文件检查；
+- 只提交这个仓库里的改动，rebase 到远端之上，不强推，用 `ls-remote` 核验，返回 `PUSHED_VERIFIED`；
+- 仓库的 `origin` 丢了（快照恢复），会从它的 `LOCATION.json` 自动补回。
+
+私有仓库加 `--private`，跳过隐私扫描，其余检查照做。
+
 ## 发布到公开仓库之前
 
 `skills.py privacy-scan --path <公开仓库>`：按进度库 `PRIVACY_TERMS.json` 里的私有词表（私有项目名、主题）和凭据格式检查，有命中就不要推送。新增私有项目时，把它的标识词加进这个词表。
