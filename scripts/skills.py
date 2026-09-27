@@ -230,8 +230,11 @@ def add(root, src_dir, name, source_url, repo=None, commit=None, path=None, trus
             raise SkillError(f'external/{name} exists; use --replace to update it (git keeps the old version)')
         shutil.rmtree(dest)
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns('.git'))
+    for f in dest.rglob('*'):  # workspace snapshots drop executable bits; store plain files, run via python3/bash
+        if f.is_file():
+            os.chmod(f, 0o644)
     source = {'name': name, 'source_url': source_url, 'repo': repo, 'commit': commit, 'path': path, 'trust': trust,
-              'license': license_ or result['license'], 'fetched_at': now(),
+              'license': license_ or result['license'], 'fetched_at': now(), 'modes_normalized': True,
               'description': result['description'] or '',
               'review': {'verdict': result['verdict'], 'reviewer': 'skills.py static review v1', 'reviewed_at': now(),
                          'hosts': result['hosts'], 'findings': result['findings'][:60],

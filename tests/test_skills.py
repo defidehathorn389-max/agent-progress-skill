@@ -104,6 +104,10 @@ class Registry(unittest.TestCase):
         source = json.loads((self.r / 'external' / 'table-fmt' / 'SOURCE.json').read_text())
         self.assertEqual(set(source['files']), {'SKILL.md', 'LICENSE'})
         self.assertTrue(sk.verify(self.r)['pass'])
+        exe = make_skill(self.d / 'exe', files={'run.sh': 'echo hi\n'})
+        os.chmod(exe / 'run.sh', 0o755)
+        sk.add(self.r, exe, 'exe-skill', 'https://github.com/acme/skills', repo='acme/skills')
+        self.assertEqual(os.stat(self.r / 'external' / 'exe-skill' / 'run.sh').st_mode & 0o111, 0)  # no exec bits stored
         (self.r / 'external' / 'table-fmt' / 'SKILL.md').write_text('tampered')
         self.assertEqual(sk.verify(self.r)['problems'][0]['changed_files'], ['SKILL.md'])
         with self.assertRaises(sk.SkillError):
