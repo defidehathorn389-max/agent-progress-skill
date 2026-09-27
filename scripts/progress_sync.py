@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Git sync for the private agent-progress repository (v2, standard library only).
 
-  clone  --repo OWNER/NAME [--dest DIR] [--depth N]
+  clone  --repo OWNER/NAME [--dest DIR] [--depth N]   (re-runnable: an existing clone is repaired and pulled)
+  doctor                                               one-shot health check with concrete fixes
+  pull                                                 fast-forward / rebase onto the remote safely
   status [--fetch] [--project D/P ...]
   push   --project D/P [--project ...] [--path REL ...] -m MESSAGE [--dry-run]
+  save   --project D/P --expected ID --patch FILE|- --note TEXT [-m MESSAGE] [--path REL ...] [--dry-run]
+                                                       handoff update + push in one step (end-of-turn)
+
+Workspace snapshots on some platforms drop .git/config (remote + identity). Every command re-adds a
+missing `origin` from LOCATION.json (progress_remote_url) or --remote-url, and commits fall back to
+the last commit's author when user.email is unset.
 
 Credentials: $GH_TOKEN or $GITHUB_TOKEN, or --token-file PATH (outside the repository).
 The token reaches git only through a throw-away GIT_ASKPASS helper that reads it from the
@@ -106,15 +114,38 @@ def read_token(token_file, root):
 
 # ---------------------------------------------------------------- repository helpers
 
-def repo_info(root, git):
+def location_remote(root):
+    try:
+        url = json.loads((Path(root) / 'LOCATION.json').read_text(encoding='utf-8')).get('progress_remote_url')
+    except (OSError, ValueError, AttributeError):
+        return None
+    return url if isinstance(url, str) and url.startswith(('https://', 'git@', '/')) and not USERINFO.search(url) else None
+
+
+def ensure_origin(root, git, remote_url=None):
+    """Re-add origin if a workspace snapshot dropped .git/config. Returns the repairs made."""
+    if git.out(['remote', 'get-url', 'origin'], root, check=False):
+        return []
+    url = remote_url or location_remote(root)
+    if not url:
+        raise SyncError("git remote 'origin' is missing (workspace snapshots can drop .git/config) and LOCATION.json "
+                        'has no progress_remote_url; pass --remote-url https://github.com/OWNER/agent-progress.git')
+    if USERINFO.search(url):
+        raise SyncError('Refusing a remote URL with embedded credentials; use a clean URL plus GH_TOKEN')
+    git.run(['remote', 'add', 'origin', url], root)
+    return ['origin']
+
+
+def repo_info(root, git, remote_url=None):
     root = Path(root)
     if not (root / '.git').exists():
         raise SyncError('Not a git repository: ' + str(root))
     branch = git.out(['symbolic-ref', '--quiet', '--short', 'HEAD'], root, check=False)
     if not branch:
         raise SyncError('Detached HEAD: check out the default branch first')
+    repairs = ensure_origin(root, git, remote_url)
     url = git.out(['remote', 'get-url', 'origin'], root, check=False)
-    return {'branch': branch, 'origin_url_has_credentials': bool(USERINFO.search(url))}
+    return {'branch': branch, 'origin_url_has_credentials': bool(USERINFO.search(url)), 'repairs': repairs}
 
 
 def ensure_no_operation_in_progress(root):
@@ -148,9 +179,20 @@ def show_bytes(git, root, spec):
     return p.stdout if p.returncode == 0 else None
 
 
-def identity_args(git, root):
-    configured = git.run(['config', 'user.email'], root, check=False)
-    return [] if configured.returncode == 0 and configured.stdout.strip() else FALLBACK_IDENTITY
+def identity(git, root):
+    """(-c args, source). Prefer git config; else the last commit's author (snapshots may drop .git/config)."""
+    if git.out(['config', 'user.email'], root, check=False):
+        return [], 'git config'
+    last = git.out(['log', '-1', '--format=%an%x00%ae'], root, check=False)
+    if '\0' in last:
+        name, mail = last.split('\0', 1)
+        if name.strip() and mail.strip():
+            return ['-c', f'user.name={name.strip()}', '-c', f'user.email={mail.strip()}'], 'last commit author'
+    return FALLBACK_IDENTITY, 'fallback noreply identity'
+
+
+def identity_args(git, root):  # backward-compatible helper
+    return identity(git, root)[0]
 
 
 def remote_branch_exists(git, root, branch):
@@ -198,6 +240,8 @@ def clone(git, dest, repo=None, url=None, depth=None):
     if not url or USERINFO.search(url):
         raise SyncError('A clean remote URL without embedded credentials is required')
     dest = Path(dest)
+    if (dest / '.git').exists():  # already cloned (possibly restored from a snapshot): repair + pull
+        return dict(pull(dest, git, url), dest=str(dest), note='existing clone reused')
     if dest.exists() and any(dest.iterdir()):
         raise SyncError('Destination exists and is not empty: ' + str(dest))
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -208,11 +252,13 @@ def clone(git, dest, repo=None, url=None, depth=None):
             'branch': git.out(['symbolic-ref', '--quiet', '--short', 'HEAD'], dest, check=False)}
 
 
-def status(root, git, fetch=False, projects=None):
+def status(root, git, fetch=False, projects=None, remote_url=None):
     root = Path(root)
-    info = repo_info(root, git)
+    info = repo_info(root, git, remote_url)
     branch = info['branch']
     result = {'branch': branch, 'fetched_now': False, 'checked_at': utcnow()}
+    if info['repairs']:
+        result['repairs'] = info['repairs']
     if fetch:
         try:
             if remote_branch_exists(git, root, branch):
@@ -303,13 +349,13 @@ def rebase_onto_remote(root, git, branch, ident):
     return regenerated
 
 
-def push(root, git, projects, extra_paths=(), message='', dry_run=False, max_file_mb=25):
+def push(root, git, projects, extra_paths=(), message='', dry_run=False, max_file_mb=25, remote_url=None):
     root = Path(root).resolve()
     if not projects:
         raise SyncError('At least one --project is required')
     if not message.strip():
         raise SyncError('A commit message is required')
-    info = repo_info(root, git)
+    info = repo_info(root, git, remote_url)
     branch = info['branch']
     ensure_no_operation_in_progress(root)
     for proj in projects:
@@ -327,7 +373,7 @@ def push(root, git, projects, extra_paths=(), message='', dry_run=False, max_fil
         raise SyncError('Uncommitted changes outside the selected paths would block a safe rebase: ' +
                         ', '.join(blocking[:10]) + ' (include them with --path, commit or stash them)')
     max_bytes = max_file_mb * 1024 * 1024
-    ident = identity_args(git, root)
+    ident, ident_source = identity(git, root)
     remote_exists = remote_branch_exists(git, root, branch)
 
     if dry_run:
@@ -410,16 +456,142 @@ def push(root, git, projects, extra_paths=(), message='', dry_run=False, max_fil
               'derived_conflicts_regenerated': regenerated, 'checkpoints': checkpoints,
               'verified_at': utcnow(),
               'method': 'git push (no force) + git ls-remote returned the same commit id; '
-                        'the commit id hashes the full tree, so remote content is byte-identical'}
+                        'the commit id hashes the full tree, so remote content is byte-identical',
+              'identity': ident_source}
+    if info['repairs']:
+        result['repairs'] = info['repairs']
     if info['origin_url_has_credentials']:
         result['warning'] = 'origin URL embeds credentials (redacted); switch to a clean URL plus GH_TOKEN'
     return result
+
+
+def pull(root, git, remote_url=None):
+    """Bring the clone up to date without losing local commits: fast-forward, or rebase local commits
+    (derived-view conflicts are regenerated; anything else aborts cleanly). Never discards work."""
+    root = Path(root).resolve()
+    info = repo_info(root, git, remote_url)
+    branch = info['branch']
+    ensure_no_operation_in_progress(root)
+    base = {'branch': branch, 'repairs': info['repairs'], 'checked_at': utcnow()}
+    if not remote_branch_exists(git, root, branch):
+        return dict(base, status='NO_REMOTE_BRANCH', note='remote has no such branch yet; push will create it')
+    git.run(['fetch', '--quiet', 'origin', branch], root)
+    remote_ref = f'refs/remotes/origin/{branch}'
+    has_head = git.run(['rev-parse', '--verify', '--quiet', 'HEAD'], root, check=False).returncode == 0
+    if not has_head:  # empty local repository: adopt the remote branch
+        git.run(['reset', '--quiet', '--hard', remote_ref], root)
+        return dict(base, status='UPDATED', commit=git.out(['rev-parse', 'HEAD'], root))
+    behind, ahead = (int(x) for x in git.out(['rev-list', '--left-right', '--count', f'{remote_ref}...HEAD'], root).split())
+    if behind == 0:
+        return dict(base, status='UP_TO_DATE', commit=git.out(['rev-parse', 'HEAD'], root), local_commits_not_pushed=ahead)
+    dirty = [p for xy, p in status_entries(root, git) if xy != '??']
+    if dirty:
+        raise SyncError('Uncommitted tracked changes block pull: ' + ', '.join(dirty[:10]) +
+                        ' (push them first with progress_sync.py push, or stash them)')
+    ident, _ = identity(git, root)
+    regenerated = []
+    if ahead == 0:
+        git.run(['merge', '--ff-only', '--quiet', remote_ref], root)
+    else:
+        regenerated = rebase_onto_remote(root, git, branch, ident)
+    return dict(base, status='UPDATED', commit=git.out(['rev-parse', 'HEAD'], root), pulled_commits=behind,
+                local_commits_rebased=ahead, derived_conflicts_regenerated=regenerated,
+                note='local commits are rebased but not pushed yet' if ahead else None)
+
+
+def save(root, git, project, expected, patch, note, message=None, extra_paths=(), dry_run=False, remote_url=None):
+    """End-of-turn in one step: handoff update (expected-HEAD protected) + verified push."""
+    written = handoff.update(root, project, patch, expected, note, dry_run=dry_run)
+    if dry_run:
+        return {'status': 'DRY_RUN', 'update': written}
+    try:
+        synced = push(root, git, [project], extra_paths, message or f'{project}: {note}'[:120], remote_url=remote_url)
+    except (SyncError, handoff.HandoffError) as e:
+        raise SyncError(f"checkpoint {written['checkpoint_id']} (rev {written['revision']}) is written locally but "
+                        f'NOT synced (LOCAL_ONLY); fix the cause and run push again: {e}')
+    return {'status': synced['status'], 'checkpoint': {k: written[k] for k in ('checkpoint_id', 'revision', 'changed_keys', 'lint')},
+            'sync': synced}
+
+
+def _skill_heads(git, skill_dir, root):
+    """(local skill HEAD, remote main of the public skill repo, pinned head in LOCATION.json)."""
+    local = git.out(['rev-parse', 'HEAD'], skill_dir, check=False) if (Path(skill_dir) / '.git').exists() else ''
+    try:
+        loc = json.loads((Path(root) / 'LOCATION.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        loc = {}
+    pinned = (loc.get('public_rule_heads') or {}).get('agent-progress-skill', '')
+    url = loc.get('remote_entry_url') or 'https://github.com/defidehathorn389-max/agent-progress-skill'
+    line = git.out(['ls-remote', url.rstrip('/') + ('' if url.endswith('.git') else '.git'), 'refs/heads/main'], skill_dir, check=False)
+    return local, (line.split()[0] if line.split() else ''), pinned, url
+
+
+def doctor(root, git, token_present, remote_url=None, skill_dir=None):
+    """Start-of-session health check. Read-only except for re-adding a missing origin."""
+    root = Path(root)
+    checks = []
+
+    def add(name, ok, detail, fix=None, advisory=False):
+        checks.append({'check': name, 'ok': bool(ok), 'detail': detail, **({'fix': fix} if fix and not ok else {}),
+                       **({'advisory': True} if advisory else {})})
+
+    add('git', shutil.which('git') is not None, 'git command available', 'install git')
+    add('credentials', token_present, 'token available via GH_TOKEN/GITHUB_TOKEN/--token-file (value not shown)',
+        'save the token outside the repository and pass --token-file, or export GH_TOKEN')
+    if not (root / '.git').exists():
+        add('clone', False, f'{root} is not a git clone', 'progress_sync.py --token-file F clone --repo OWNER/agent-progress')
+        return {'ok': False, 'checks': checks}
+    branch = None
+    try:
+        info = repo_info(root, git, remote_url)
+        branch = info['branch']
+        add('origin', True, 'origin re-added from LOCATION.json (snapshot had dropped .git/config)' if info['repairs'] else 'origin present')
+        if info['origin_url_has_credentials']:
+            add('origin url', False, 'origin URL embeds credentials', 'git remote set-url origin https://github.com/OWNER/agent-progress.git')
+    except SyncError as e:
+        add('origin', False, str(e), 'pass --remote-url https://github.com/OWNER/agent-progress.git')
+    add('identity', True, identity(git, root)[1])
+    if branch:
+        try:
+            if remote_branch_exists(git, root, branch):
+                git.run(['fetch', '--quiet', 'origin', branch], root)
+                behind, ahead = (int(x) for x in git.out(['rev-list', '--left-right', '--count',
+                                                            f'refs/remotes/origin/{branch}...HEAD'], root).split())
+                add('remote', behind == 0, f'ahead {ahead}, behind {behind}', 'progress_sync.py pull')
+                if ahead:
+                    add('unpushed commits', False, f'{ahead} local commit(s) not on the remote', 'progress_sync.py push --project ...')
+            else:
+                add('remote', True, 'remote branch does not exist yet (first push will create it)')
+        except SyncError as e:
+            add('remote', False, str(e), 'check network access and token scope (Contents: read/write)')
+    dirty = [p for xy, p in status_entries(root, git) if xy != '??']
+    add('working tree', not dirty, f'{len(dirty)} uncommitted tracked path(s)' + (': ' + ', '.join(dirty[:5]) if dirty else ''),
+        'push the affected projects (progress_sync.py push) or stash')
+    try:
+        v = handoff.validate(root)
+        stale = [x['project'] for x in v['projects'] if x['warnings']]
+        add('integrity', True, f"{len(v['projects'])} project(s), full chains verified")
+        add('derived views', v['index_current'] and not stale, 'INDEX/CURRENT current' if v['index_current'] and not stale
+            else f'stale: {stale or "INDEX.md"}', 'handoff.py rebuild, then push')
+        lint = {x['project']: len(x['lint']) for x in v['projects'] if x['lint']}
+        add('lint', not lint, 'no advisories' if not lint else f'advisories: {lint}',
+            'see handoff.py validate --project P; fix during that project\'s next checkpoint', advisory=True)
+    except handoff.HandoffError as e:
+        add('integrity', False, str(e), 'see references/recovery.md; do not overwrite HEAD')
+    if skill_dir:
+        local, remote, pinned, url = _skill_heads(git, skill_dir, root)
+        ok = bool(local) and (not remote or local == remote)
+        add('skill version', ok, f'local {local[:7] or "?"}, remote {remote[:7] or "?"}, LOCATION pin {pinned[:7] or "?"}',
+            f'update the skill clone: git -C {skill_dir} pull --ff-only {url} main (or re-clone)')
+    return {'ok': all(c['ok'] or c.get('advisory') for c in checks), 'checks': checks, 'checked_at': utcnow()}
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--root', type=Path, default=handoff.DEFAULT_ROOT)
     ap.add_argument('--token-file', type=Path, help='file outside the repository holding the token')
+    ap.add_argument('--remote-url', help='progress repository URL used to re-add a missing origin '
+                                         '(default: LOCATION.json progress_remote_url)')
     sub = ap.add_subparsers(dest='command', required=True)
     c = sub.add_parser('clone')
     src = c.add_mutually_exclusive_group(required=True)
@@ -430,6 +602,16 @@ def main(argv=None):
     s = sub.add_parser('status')
     s.add_argument('--fetch', action='store_true')
     s.add_argument('--project', action='append')
+    sub.add_parser('doctor')
+    sub.add_parser('pull')
+    v = sub.add_parser('save')
+    v.add_argument('--project', required=True)
+    v.add_argument('--expected', required=True)
+    v.add_argument('--patch', required=True, help='patch JSON file, or - for stdin')
+    v.add_argument('--note', required=True)
+    v.add_argument('-m', '--message')
+    v.add_argument('--path', action='append', default=[])
+    v.add_argument('--dry-run', action='store_true')
     p = sub.add_parser('push')
     p.add_argument('--project', action='append', required=True)
     p.add_argument('--path', action='append', default=[], help='extra repository-relative path to commit')
@@ -439,14 +621,24 @@ def main(argv=None):
     a = ap.parse_args(argv)
     git = None
     try:
-        git = Git(read_token(a.token_file, a.root))
+        token = read_token(a.token_file, a.root)
+        git = Git(token)
         if a.command == 'clone':
             result = clone(git, a.dest or a.root, a.repo, a.url, a.depth)
         elif a.command == 'status':
-            result = status(a.root, git, a.fetch, a.project)
+            result = status(a.root, git, a.fetch, a.project, a.remote_url)
+        elif a.command == 'pull':
+            result = pull(a.root, git, a.remote_url)
+        elif a.command == 'doctor':
+            result = doctor(a.root, git, bool(token), a.remote_url, Path(__file__).resolve().parents[1])
+        elif a.command == 'save':
+            result = save(a.root, git, a.project, a.expected, handoff.load_input(a.patch), a.note, a.message,
+                          a.path, a.dry_run, a.remote_url)
         else:
-            result = push(a.root, git, a.project, a.path, a.message, a.dry_run, a.max_file_mb)
+            result = push(a.root, git, a.project, a.path, a.message, a.dry_run, a.max_file_mb, a.remote_url)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if a.command == 'doctor':
+            return 0 if result['ok'] else 1
         return 0 if result.get('status') not in {'UNCERTAIN_REMOTE'} else 1
     except (SyncError, handoff.HandoffError, OSError, ValueError, subprocess.TimeoutExpired) as e:
         text = str(e) if isinstance(e, (SyncError, handoff.HandoffError)) else type(e).__name__

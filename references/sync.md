@@ -37,6 +37,16 @@ Git 提交 ID 是对整棵目录树的哈希（树 → 子树 → 文件 blob）
 - Contents API 对较大的文件可能不返回内容体，不要把空内容误判为同步丢失；改用 `/git/blobs/{sha}` 读回。
 - 在核对父提交之前，不要重推。
 
+## 会话开始：clone / doctor / pull
+
+- `clone` 可以重复运行：目标目录已有克隆（包括从工作区快照恢复的）时，会自动修复并拉取，不报错。
+- `doctor` 一次检查 git、凭据、origin、提交身份、落后/未推送、未提交改动、完整性、派生视图、lint（只作提示）和 Skill 版本（本地 / 远端 / LOCATION 固定版本），每个问题都附修复命令。
+- `pull`：远端领先时快进；本地也有未推送提交时 rebase（派生视图冲突自动重建，其他冲突中止并保留本地提交）；有未提交的已跟踪改动时拒绝执行，以免丢失。
+
+## 工作区快照丢失 `.git/config`
+
+有些平台的工作区快照不保存 `.git/config`。恢复后，克隆在本地仍可用（HEAD、提交、`refs/remotes` 都在），但 `origin` 和 `user.name/email` 没了，fetch/push 会失败。所有 `progress_sync.py` 命令都会自动修复：先从 `LOCATION.json` 的 `progress_remote_url`（或 `--remote-url`）补回 `origin`，再以最后一次提交的作者作为提交身份。输出里的 `repairs` 和 `identity` 字段会注明这些修复。含凭据的 URL 会被拒绝。
+
 ## 部分工作区与存储上限
 
 - 部分检出时，`INDEX.md` 会保留未下载项目的导航行（`validate` 在 `unloaded_projects` 中列出）。`push` 只提交所选项目，不会镜像删除远端独有的文件。

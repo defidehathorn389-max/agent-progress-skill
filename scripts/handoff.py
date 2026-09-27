@@ -13,6 +13,7 @@ Commands (every command accepts --root; default $AGENT_PROGRESS_ROOT or /home/us
   state      --project D/P     HEAD state JSON only (starting point for a full rewrite)
   update     --project D/P --expected ID --patch FILE|- --note TEXT [--dry-run]
   checkpoint --project D/P --expected ID|NEW --state FILE|- --note TEXT [--merge-parent ID]
+  new        --project D/P --title T --goal G [--status S] [--first-action A] [--next-action X ...] [--related D/P ...]
   validate   [--project D/P] [--deep] [--verify-local --workspace DIR]
   rebuild                      regenerate every CURRENT.md and INDEX.md
 """
@@ -648,6 +649,22 @@ def apply_patch(state, patch):
     return s
 
 
+TEMPLATE_PATH = Path(__file__).resolve().parents[1] / 'templates' / 'state.json'
+
+
+def new_state(title, goal, status='IN_PROGRESS', first_action=None, related=(), next_actions=()):
+    """A valid initial state from templates/state.json (built-in fallback if the template is missing)."""
+    try:
+        s = json.loads(TEMPLATE_PATH.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        s = {k: [] for k in LIST_KEYS}
+        s.update(sync={}, handoff={})
+    s.update(title=title, goal=goal, status=status, related_projects=list(related), next_actions=list(next_actions))
+    s['handoff'] = dict(s.get('handoff') or {}, running_operations=[],
+                        first_action=first_action or s.get('handoff', {}).get('first_action') or '读取本项目检查点并与用户确认第一步')
+    return s
+
+
 def update(root, project, patch, expected, note, dry_run=False):
     p = project_dir(root, project)
     h, cp = checked_head(p)
@@ -750,11 +767,12 @@ def resume_text(root, project):
         lines += ['', '## 提示（不阻断）'] + ['- ' + x for x in lint]
     scripts = Path(__file__).resolve().parent
     root_arg = '' if Path(root).resolve() == DEFAULT_ROOT.resolve() else f' --root {root}'
-    lines += ['', '## 写入本项目', '先把补丁写到 /tmp/patch.json（规范见 references/state-schema.md），然后：',
-              f"python3 {scripts / 'handoff.py'}{root_arg} update --project {project} "
-              f"--expected {h['checkpoint_id']} --patch /tmp/patch.json --note '本次实际变化及证据' [--dry-run]",
-              f"python3 {scripts / 'progress_sync.py'}{root_arg} --token-file /tmp/.gh_token push "
-              f"--project {project} -m '{project}: 变化摘要'"]
+    tok = next((t for t in ('/home/user/.secrets/github_token', '/tmp/.gh_token') if Path(t).exists()),
+               '/home/user/.secrets/github_token')
+    lines += ['', '## 写入本项目', '先把补丁写到 /tmp/patch.json（规范见 references/state-schema.md），然后一步写入并同步：',
+              f"python3 {scripts / 'progress_sync.py'}{root_arg} --token-file {tok} save --project {project} "
+              f"--expected {h['checkpoint_id']} --patch /tmp/patch.json --note '本次实际变化及证据'",
+              f"（分两步：handoff.py update …，再 progress_sync.py push --project {project} -m '…'；只预览用 update --dry-run）"]
     return '\n'.join(lines) + '\n'
 
 
@@ -771,6 +789,15 @@ def main(argv=None):
         c.add_argument('--project', required=True)
     sub.choices['read'].add_argument('--allow-missing-parents', action='store_true',
                                      help='report locally missing ancestors instead of failing (reading only)')
+    n = sub.add_parser('new', help='create a project from templates/state.json (expected NEW)')
+    n.add_argument('--project', required=True)
+    n.add_argument('--title', required=True)
+    n.add_argument('--goal', required=True)
+    n.add_argument('--status', default='IN_PROGRESS', choices=sorted(STATUSES - DEPRECATED_STATUSES))
+    n.add_argument('--first-action')
+    n.add_argument('--next-action', action='append', default=[])
+    n.add_argument('--related', action='append', default=[])
+    n.add_argument('--note', default='创建项目')
     c = sub.add_parser('checkpoint')
     c.add_argument('--project', required=True)
     c.add_argument('--expected', required=True)
@@ -808,6 +835,10 @@ def main(argv=None):
         elif a.command == 'checkpoint':
             state = load_input(a.state)
             h = checkpoint(a.root, a.project, state, a.expected, a.note, a.merge_parent)
+            result = dict(h, lint=lint_state(state))
+        elif a.command == 'new':
+            state = new_state(a.title, a.goal, a.status, a.first_action, a.related, a.next_action)
+            h = checkpoint(a.root, a.project, state, 'NEW', a.note)
             result = dict(h, lint=lint_state(state))
         elif a.command == 'update':
             result = update(a.root, a.project, load_input(a.patch), a.expected, a.note, a.dry_run)

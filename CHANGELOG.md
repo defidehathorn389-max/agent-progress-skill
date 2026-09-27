@@ -1,5 +1,15 @@
 # 变更记录
 
+## v2.1.0 — 2026-09-27
+
+- **抗快照丢失**：有些平台的工作区快照不保存 `.git/config`，恢复后 `origin` 和提交身份都会丢失，fetch/push 随之失败。现在所有同步命令会从 `LOCATION.json` 的 `progress_remote_url`（或 `--remote-url`）自动补回 `origin`，并以最后一次提交的作者作为提交身份。
+- `progress_sync.py doctor`：会话开始时一次性检查（凭据、origin、身份、落后/未推送、未提交改动、完整性、派生视图、lint 提示、Skill 版本），每个问题附修复命令；lint 只作提示，不算失败。
+- `progress_sync.py pull`：快进，或 rebase 本地未推送的提交（派生视图冲突自动重建）；有未提交改动时拒绝执行，绝不丢失工作。
+- `progress_sync.py save`：`update` + `push` 一步完成（回合结束协议）；推送失败时明确报告检查点为 LOCAL_ONLY。
+- `progress_sync.py clone` 可重复运行：已有克隆时自动修复并拉取。
+- `handoff.py new`：用参数创建项目（title/goal/status/first-action/next-action/related），不必手写 JSON。
+- 新增 14 项测试（合计 57 项），包括模拟快照删除 `.git/config` 之后的推送。
+
 ## v2.0.1 — 2026-09-27
 
 - 凭据规则按用户决定调整：同一对话中已提供的凭据（包括压缩摘要里保留的）直接复用；用户允许时，可以存放在仓库之外的持久化工作区文件中（`/home/user/.secrets/github_token`）。硬性底线不变：不写入任何 Git 仓库、远端 URL 或检查点（公开仓库中的 GitHub token 会被自动吊销）。全新对话仍需用户提供一次。

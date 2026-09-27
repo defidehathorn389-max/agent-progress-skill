@@ -31,7 +31,11 @@ python3 $S/handoff.py checkpoint --project research/example --expected NEW --sta
 python3 $S/handoff.py update --project research/example --expected <HEAD> --patch templates/patch.example.json --note '…' --dry-run
 python3 $S/handoff.py validate [--deep] [--verify-local --workspace DIR]
 python3 $S/handoff.py rebuild
-python3 $S/progress_sync.py --token-file /tmp/.gh_token clone --repo OWNER/agent-progress
+python3 $S/handoff.py new    --project research/example --title '示例' --goal '…' --next-action '…'
+python3 $S/progress_sync.py --token-file /tmp/.gh_token clone --repo OWNER/agent-progress   # 可重复运行
+python3 $S/progress_sync.py --token-file /tmp/.gh_token doctor
+python3 $S/progress_sync.py --token-file /tmp/.gh_token pull
+python3 $S/progress_sync.py --token-file /tmp/.gh_token save --project research/example --expected <HEAD> --patch /tmp/patch.json --note '…'
 python3 $S/progress_sync.py --token-file /tmp/.gh_token status --fetch
 python3 $S/progress_sync.py --token-file /tmp/.gh_token push --project research/example -m 'research/example: …'
 python3 -m unittest discover -s tests
@@ -44,7 +48,7 @@ python3 -m unittest discover -s tests
 | 文件 | 作用 |
 |---|---|
 | `scripts/handoff.py` | 本地检查点：锁、expected-HEAD、不可变快照、父链校验（迭代实现，无深度上限）、补丁更新、接手简报、lint、派生视图。不联网 |
-| `scripts/progress_sync.py` | Git 同步：clone/status/push；token 只在内存中使用；定向暂存；派生视图冲突自动重建；用 ls-remote 核验 |
+| `scripts/progress_sync.py` | Git 同步：clone/doctor/pull/status/push/save；token 只在内存中使用；定向暂存；派生视图冲突自动重建；用 ls-remote 核验；快照丢失 `.git/config` 时自动修复 |
 | `scripts/export_handoff.py` | 离线便携包（排除凭据和媒体，附清单） |
 | `scripts/credential_vault.py`、`session_github.py`、`sync_progress.py` | 可选的密文封装模式（旧流程，需要 `requests cryptography`） |
 | `templates/state.json`、`templates/patch.example.json` | 新项目模板、补丁示例 |
