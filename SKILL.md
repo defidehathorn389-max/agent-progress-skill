@@ -12,8 +12,8 @@ description: 跨会话、跨模型的项目进度与交接协议（私有 agent-
 ```bash
 git clone -q https://github.com/defidehathorn389-max/agent-progress-skill /home/user/agent-progress-skill
 S=/home/user/agent-progress-skill/scripts
-# token 只来自用户当前消息；放在工作区之外（/tmp 不进快照），不写进仓库、URL、日志或回复
-umask 077; printf '%s' '<用户提供的token>' > /tmp/.gh_token
+# token 来自用户在本对话中的消息；存放在任何 Git 仓库之外，绝不提交或写进远端 URL（见 SESSION_POLICY）
+umask 077; printf '%s' '<用户提供的token>' > /tmp/.gh_token   # 用户允许时也可存到 /home/user/.secrets/github_token，同一对话内跨轮次保留
 python3 $S/progress_sync.py --token-file /tmp/.gh_token clone --repo defidehathorn389-max/agent-progress
 python3 $S/handoff.py list                                        # 选项目
 python3 $S/handoff.py resume --project <方向>/<项目ID>            # 接手简报（含完整性校验）
@@ -31,7 +31,7 @@ python3 $S/progress_sync.py --token-file /tmp/.gh_token push --project <方向>/
 3. **项目隔离**：一个任务一个稳定 ID（改名只改 title）。只读相关项目；多方向任务拆成关联项目并用 `related_projects` 互指。某项目的参数（音色、语速、风格）不外溢；只有用户明确的跨项目偏好才写 `GLOBAL.md`。
 4. **证据分级**：把“用户明确要求 / 实际验证 / 历史记录 / 助手推断”分开写，推断不得升级为用户决定。已完成项必须引用证据 ID；技术 QA、语义检查、人工终审、用户批准分别记录，没做就写没做。
 5. **历史不可变**：检查点只追加。用户纠正时新增决定并标 `supersedes`。写入必须带 `--expected`（刚读到的 HEAD）；冲突时重读合并，不抢锁、不强推、不删除他人记录。
-6. **秘密不入库**：口令、token、密文、私信原文不进进度、Skill、提交、日志、URL 或回复。工具会拦截常见格式，但不是完整的防泄漏检查。
+6. **秘密不入库**：口令、token、密文、私信原文不进进度、Skill、任何 Git 提交或远端 URL；用户允许时，可以放在仓库之外的工作区文件里（见 SESSION_POLICY）。工具会拦截常见格式，但不是完整的防泄漏检查。
 7. **同步四态分开**：本地写入 ≠ 本地提交 ≠ 已推送 ≠ 远端已核验。只有 `progress_sync.py push` 返回 `PUSHED_VERIFIED`，或 `status --fetch` 显示 `PUSHED_VERIFIED`，才能说“已同步”。
 8. **不夸大**：已发起 ≠ 已成功；只有模板没有项目档案 ≠ 已交接；只有索引没有检查点/产物 ≠ 可恢复。
 9. **大媒体留素材库**：进度只记相对路径、版本/提交、SHA256 与恢复方式。

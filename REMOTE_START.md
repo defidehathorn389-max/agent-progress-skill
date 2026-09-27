@@ -11,7 +11,7 @@
 私有进度库是 https://github.com/defidehathorn389-max/agent-progress。
 对应项目：【方向/项目ID；不确定就列出候选让我选】。
 
-GitHub token（仅本会话使用；只放在内存或工作区外的临时文件，不写入仓库、URL、日志或回复）：
+GitHub token（本对话内复用；可以存放在任何 Git 仓库之外的工作区文件里，不提交进仓库，也不写进远端 URL）：
 【在私有消息中填入 fine-grained token】
 
 完成任务后：
