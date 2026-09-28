@@ -49,7 +49,7 @@ python3 $S/memory.py session --summary '本次对话做了什么' --open '没做
 ## 2. 接手（读取门禁）
 
 1. 读本文件，运行 `memory.py brief`，再读进度库 `GLOBAL.md`、`LOCATION.json`、`INDEX.md`。
-2. 按“方向/项目ID”选项目。用户没给 ID（例如“上次那个城市纪录片”）时，先用 `handoff.py find 关键词`（按相关度排序；命中根目录 `ALIASES.json` 里的项目别名时优先；同分时最近更新的在前）或 `handoff.py recent`（所有项目最近的记录）定位；仍不确定，才只问必要的选择。不要把全部历史当成一个任务。
+2. 按“方向/项目ID”选项目。用户没给 ID（例如“上次那个城市纪录片”）时，先用 `handoff.py find 关键词`（按相关度排序；命中根目录 `ALIASES.json` 里的项目别名时优先；同分时最近更新的在前）或 `handoff.py recent`（所有项目最近的记录）定位；仍不确定，才只问必要的选择。不要把全部历史当成一个任务。当前聊天最近的演示/测试与远端近期主项目不一致时，先用最少候选确认“继续”的目标，再补建项目档案或提出建库方案；不要把临时测试自动升级为正式主项目。
 3. 先跑一次 `progress_sync.py doctor`（落后就先 `pull`），再运行 `handoff.py resume --project …`：校验 HEAD 指纹和父链，输出接手第一步、待办、约束、不要重复的错误、最近决定、运行中任务和提示。需要完整 JSON 时用 `read`。
 4. 核对素材：素材在本地时运行 `validate --project … --verify-local --workspace …`。新环境缺媒体不等于旧模型没完成；按记录的远端提交恢复后再核。
 5. **语义一致性**：交叉核对 title、goal、pending、next_actions、`handoff.first_action` 与最新有来源的 decisions。旧任务完成后，不得沿用它的“启动中”状态、会话路径或旧 voice_id。发现冲突就在新检查点里纠正并注明证据；证据不足时才问用户。
