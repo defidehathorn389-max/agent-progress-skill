@@ -21,6 +21,13 @@
 - 锁残留：先看锁文件里的 PID/时间和实际任务状态，无法确认时问用户。工具不自动抢锁。
 - 批处理要失败即停（`set -euo pipefail`），并检查 checkpoint 命令的返回值以及新的 HEAD/revision。检查点失败时，不得继续基于旧 HEAD 声称“本轮新状态已完成”；已上传的其他文件要准确限定范围，纠正后再写并核验真正的新检查点。
 
+## save 的提交范围与根目录改动
+
+- 保存前先查看 `git status --short`。项目保存默认只包含该项目和派生视图；根目录的 `PRIVACY_TERMS.json`、`ALIASES.json` 或 `LOCATION.json` 等相关变更，需要逐个用 `--path` 显式纳入：
+  `progress_sync.py --token-file <仓库外凭据文件> save --project <方向/ID> --expected <HEAD> --patch <补丁文件> --note '实际变化' --path PRIVACY_TERMS.json`。
+- 若 `save` 报告“检查点已写入，但因所选路径外存在未提交变更而 LOCAL_ONLY”，先读取项目 HEAD，确认已生成的检查点；修复提交范围后运行 `push --project <方向/ID> --path <相关文件> -m '实际变化'`，推送同一个检查点，不重复执行旧补丁，不用 `--path .` 夹带无关项目，更不能强推。
+- 只有修复后的命令返回 `PUSHED_VERIFIED` 才报告同步完成；首次失败属于本地保存，不是已推送。
+
 ## 稀疏恢复（只取回部分文件）
 
 `validate`、`read`、`checkpoint` 会迭代校验全部可达父链（v2 没有递归深度限制）。正常 `git clone` 本来就包含完整父链。
