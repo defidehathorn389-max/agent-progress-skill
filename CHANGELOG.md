@@ -1,5 +1,11 @@
 # 变更记录
 
+## v2.7.2 — 2026-10-10
+
+- progress_sync clone --slim 默认只检出最近 3 天的 checkpoint（`--recent-days N`，0 = 全部），每个项目的最新 checkpoint 始终保留，项目内 `evidence/` 一并排除；git 历史不变。实测 agent-progress 工作区从 134 MB 降到 4.4 MB。
+- slim 克隆会在每次 pull 时重新按时间窗口裁剪（sparse-checkout 文件头记录 `recent-days=N`），新增的旧 checkpoint 也会过期。
+- 新增 tests/test_slim.py；全部 105 项测试通过。
+
 ## v2.7.1 — 2026-09-27
 
 - references/workspace.md 补充实测：从 1.2 GB 的素材库只取一集约 9 秒，工作区占用约为所取内容的 2 倍（`.git` 里再存一份），常驻区不变；估算磁盘时按 2 倍算。

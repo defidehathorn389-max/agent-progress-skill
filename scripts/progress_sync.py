@@ -43,7 +43,61 @@ FORBIDDEN = re.compile(r'(^|/)(\.env[^/]*|\.netrc|\.git-credentials|credentials|
                        r'|\.enc\.json$|\.pem$|\.key$|(^|/)\.write\.lock$|\.tmp$')
 DERIVED = re.compile(r'^(INDEX\.md|projects/[a-z0-9-]+/[a-z0-9-]+/CURRENT\.md)$')
 HEAD_FILE = re.compile(r'^projects/([a-z0-9-]+/[a-z0-9-]+)/HEAD\.json$')
-SLIM_PATTERNS = ('/*', '!/evidence/', '!/sync-receipts/')  # slim progress clone: no media evidence, no legacy receipts
+SLIM_PATTERNS = ('/*', '!/evidence/', '!/sync-receipts/')  # legacy base (kept for reference)
+RECENT_DAYS_DEFAULT = 3  # slim clone keeps checkpoints from the last N days (+ each project's newest)
+CHECKPOINT_PATH_RE = re.compile(r'^projects/(.+)/checkpoints/(\d{8}T\d{6}Z)-[0-9a-f]+\.json$')
+SLIM_MARK_RE = re.compile(r'recent-days=(\d+)')
+
+
+def gitignore_escape(path):
+    return re.sub(r'([*?\[\]\\#!\s])', r'\\\1', path)
+
+
+def slim_patterns(paths, days=RECENT_DAYS_DEFAULT, now=None):
+    """Sparse-checkout (gitignore style) for a slim working tree.
+
+    Excludes: top-level and per-project evidence/ (media), sync-receipts/ (legacy), and checkpoint files
+    older than `days` -- except each project's newest checkpoint, which resume needs. days=0 keeps all
+    checkpoints. Git history is untouched; this only limits what is checked out locally.
+    """
+    patterns = [f'# agent-progress slim recent-days={days}', '/*', '!/evidence/', '!/sync-receipts/',
+                '!/projects/**/evidence/']
+    excluded = 0
+    if days and days > 0:
+        cutoff = (now or datetime.datetime.now(datetime.timezone.utc)) - datetime.timedelta(days=days)
+        newest = {}
+        dated = []
+        for path in paths:
+            m = CHECKPOINT_PATH_RE.match(path)
+            if not m:
+                continue
+            ts = datetime.datetime.strptime(m.group(2), '%Y%m%dT%H%M%SZ').replace(tzinfo=datetime.timezone.utc)
+            dated.append((path, m.group(1), ts))
+            if m.group(1) not in newest or path > newest[m.group(1)]:
+                newest[m.group(1)] = path  # ids sort by time: lexicographic max = newest
+        for path, project, ts in sorted(dated):
+            if ts < cutoff and path != newest[project]:
+                patterns.append('!/' + gitignore_escape(path))
+                excluded += 1
+    return patterns, excluded
+
+
+def apply_slim(dest, git, days=RECENT_DAYS_DEFAULT):
+    """Write the slim sparse-checkout for the clone at dest and reapply it to the working tree."""
+    dest = Path(dest)
+    paths = [p for p in git.out(['ls-tree', '-r', '--name-only', 'HEAD'], dest, check=False).splitlines() if p]
+    patterns, excluded = slim_patterns(paths, days)
+    (dest / '.git' / 'info').mkdir(parents=True, exist_ok=True)
+    (dest / '.git' / 'info' / 'sparse-checkout').write_text('\n'.join(patterns) + '\n', encoding='utf-8')
+    git.run(['sparse-checkout', 'reapply'], dest, check=False)
+    return {'recent_days': days, 'tracked_paths': len(paths), 'excluded_checkpoints': excluded}
+
+
+def maybe_reslim(root, git):
+    """Keep a slim clone slim: re-apply its recent-days window (new checkpoints age out too)."""
+    f = Path(root) / '.git' / 'info' / 'sparse-checkout'
+    m = SLIM_MARK_RE.search(f.read_text(encoding='utf-8')) if f.exists() else None
+    return apply_slim(root, git, int(m.group(1))) if m else None
 MEDIA_BLOCKED = {'.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v', '.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.opus'}
 REPO_RE = re.compile(r'^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$')
 USERINFO = re.compile(r'(https?://)[^/@\s]+@')
@@ -238,7 +292,7 @@ def scan_content(path, blob, git, max_bytes):
 
 # ---------------------------------------------------------------- commands
 
-def clone(git, dest, repo=None, url=None, depth=None, slim=False):
+def clone(git, dest, repo=None, url=None, depth=None, slim=False, recent_days=RECENT_DAYS_DEFAULT):
     if repo:
         if not REPO_RE.fullmatch(repo):
             raise SyncError('--repo must look like owner/name')
@@ -247,6 +301,8 @@ def clone(git, dest, repo=None, url=None, depth=None, slim=False):
         raise SyncError('A clean remote URL without embedded credentials is required')
     dest = Path(dest)
     if (dest / '.git').exists():  # already cloned (possibly restored from a snapshot): repair + pull
+        if slim:
+            apply_slim(dest, git, recent_days)
         return dict(pull(dest, git, url), dest=str(dest), note='existing clone reused')
     if dest.exists() and any(dest.iterdir()):
         raise SyncError('Destination exists and is not empty: ' + str(dest))
@@ -254,13 +310,13 @@ def clone(git, dest, repo=None, url=None, depth=None, slim=False):
     args = ['clone', '--quiet'] + (['--filter=blob:none', '--no-checkout'] if slim else []) + \
         (['--depth', str(depth)] if depth else []) + [url, str(dest)]
     git.run(args, dest.parent)
-    if slim:  # history without old file contents; sparse working tree without media evidence
+    if slim:  # history without old file contents; working tree: recent checkpoints, no media evidence
         git.run(['sparse-checkout', 'init', '--no-cone'], dest)
-        (dest / '.git' / 'info' / 'sparse-checkout').write_text('\n'.join(SLIM_PATTERNS) + '\n')
+        apply_slim(dest, git, recent_days)
         branch = git.out(['symbolic-ref', '--quiet', '--short', 'HEAD'], dest, check=False)
         if branch and git.run(['rev-parse', '--verify', '--quiet', f'refs/remotes/origin/{branch}'], dest, check=False).returncode == 0:
             git.run(['checkout', '--quiet', branch], dest)
-    return {'status': 'CLONED', 'dest': str(dest), 'slim': slim,
+    return {'status': 'CLONED', 'dest': str(dest), 'slim': slim, 'recent_days': recent_days if slim else None,
             'commit': git.out(['rev-parse', '--verify', '--quiet', 'HEAD'], dest, check=False) or None,
             'branch': git.out(['symbolic-ref', '--quiet', '--short', 'HEAD'], dest, check=False)}
 
@@ -716,6 +772,7 @@ def pull(root, git, remote_url=None):
     info = repo_info(root, git, remote_url)
     branch = info['branch']
     ensure_no_operation_in_progress(root)
+    maybe_reslim(root, git)  # slim clones stay on their recent-days window
     base = {'branch': branch, 'repairs': info['repairs'], 'checked_at': utcnow()}
     if not remote_branch_exists(git, root, branch):
         return dict(base, status='NO_REMOTE_BRANCH', note='remote has no such branch yet; push will create it')
@@ -906,7 +963,8 @@ def main(argv=None):
     src.add_argument('--url', help='other clean remote URL or local path (tests/mirrors)')
     c.add_argument('--dest', type=Path, help='defaults to --root')
     c.add_argument('--depth', type=int)
-    c.add_argument('--slim', action='store_true', help='history without old file contents; skip evidence/ and sync-receipts/')
+    c.add_argument('--slim', action='store_true', help='history without old file contents; skip evidence/ and sync-receipts/; keep only recent checkpoints')
+    c.add_argument('--recent-days', type=int, default=RECENT_DAYS_DEFAULT, help='with --slim: checkpoints from the last N days (default 3; 0 = all)')
     s = sub.add_parser('status')
     s.add_argument('--fetch', action='store_true')
     s.add_argument('--project', action='append')
@@ -934,7 +992,7 @@ def main(argv=None):
         token = read_token(a.token_file, a.root)
         git = Git(token)
         if a.command == 'clone':
-            result = clone(git, a.dest or a.root, a.repo, a.url, a.depth, a.slim)
+            result = clone(git, a.dest or a.root, a.repo, a.url, a.depth, a.slim, a.recent_days)
         elif a.command == 'status':
             result = status(a.root, git, a.fetch, a.project, a.remote_url)
         elif a.command == 'reconcile':
