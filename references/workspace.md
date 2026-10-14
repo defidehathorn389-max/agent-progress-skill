@@ -16,6 +16,9 @@ GitHub 才是真正存东西的地方：进度（`save`）、记忆（`memory.py
 - `workspace.py status`：按快照规则统计常驻区的大小和文件数，列出最大的目录并给出建议；`doctor` 里的 `workspace` 检查用到 70% 提醒、85% 报失败。
 - `workspace.py slim`：把 agent-progress 换成轻量克隆（只取历史的目录结构、不取旧文件内容；工作树不含 `evidence/` 媒体和旧的 `sync-receipts/`）。确认新克隆与远端是同一提交、并且 `validate` 通过之后才替换；有未推送的改动时拒绝执行。需要某个证据文件时：`git -C /home/user/agent-progress sparse-checkout add /evidence/<路径>`。
 - 新环境直接轻量克隆：`progress_sync.py --root /home/user/agent-progress clone --repo OWNER/agent-progress --slim`。
+  - `doctor` 的全局父链检查可能因旧文件被稀疏排除而未通过；这不是远端丢失。接手时只恢复目标项目，并分别报告全局检查与目标项目 `validate` 的结果。
+  - 非 cone 模式已有逐文件排除时，只追加父目录不一定恢复旧文件；用 `git sparse-checkout add '/projects/<domain>/<project-id>/checkpoints/*'` 明确匹配检查点文件，再验证完整父链。保持同一个不可变 Git 提交，不改 HEAD，不加载无关项目。
+  - 部分克隆中的 `ls-tree -l`、`show`、`cat-file`、`checkout` 等“本地读取”也可能触发延迟下载。统一使用读取仓库外 token-file 的 `progress_sync.Git` 包装器，不把凭据写入 URL 或 Git 配置。
 - `workspace.py open <名称> --repo OWNER/REPO --path episodes/LOGIC-025`：只把需要的目录轻量下载到工作区（再次 `open` 同一名称会补充目录并拉到最新）。
 - `workspace.py park`：列出工作区里未提交或未推送的内容（不是仓库的文件夹也会列出，因为重启后就没了）；`park --push -m '…'` 把改动提交推送到各自的仓库并核验（不强推）。
 
