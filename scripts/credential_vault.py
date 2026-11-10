@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 
-DEFAULT_VAULT=Path('/home/user/credentials/github-token.enc.json')
+DEFAULT_VAULT=Path.home()/'credentials'/'github-token.enc.json'
 PARAMS={'name':'scrypt','n':131072,'r':8,'p':1,'length':32}
 
 def b64(b):return base64.b64encode(b).decode('ascii')

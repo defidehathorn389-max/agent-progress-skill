@@ -2,7 +2,7 @@
 """agent-skills: local-first skill registry (the user's own skills indexed + external skills cached,
 reviewed and pinned). Standard library only (git CLI for fetch/sync).
 
-Repository layout (root: --root, $AGENT_SKILLS_ROOT or /home/user/agent-skills):
+Repository layout (root: --root, $AGENT_SKILLS_ROOT or ~/agent-skills):
   external/<name>/...          downloaded skill, unchanged
   external/<name>/SOURCE.json  provenance: source URL, repo, commit, path, trust tier, license,
                                static review verdict + findings, SHA256 of every file
@@ -45,7 +45,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import handoff  # noqa: E402
 
-DEFAULT_ROOT = Path(os.environ.get('AGENT_SKILLS_ROOT') or '/home/user/agent-skills')
+DEFAULT_ROOT = Path(os.environ.get('AGENT_SKILLS_ROOT') or Path.home() / 'agent-skills')
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
 REPO_RE = re.compile(r'^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$')
 TRUST = ('official', 'curated', 'aggregator')
@@ -467,7 +467,7 @@ def sync(root, message, token=None):
 def _token(token_file):
     if token_file:
         return Path(token_file).read_text(encoding='utf-8').strip() or None
-    return os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
+    return handoff.default_token()
 
 
 def main(argv=None):
@@ -511,7 +511,7 @@ def main(argv=None):
     pb.add_argument('-m', '--message', required=True)
     pb.add_argument('--private', action='store_true', help='skip the privacy scan (private repository)')
     pb.add_argument('--remote-url')
-    pb.add_argument('--progress-root', type=Path, default=Path(os.environ.get('AGENT_PROGRESS_ROOT') or '/home/user/agent-progress'))
+    pb.add_argument('--progress-root', type=Path, default=Path(os.environ.get('AGENT_PROGRESS_ROOT') or Path.home() / 'agent-progress'))
     pb.add_argument('--token-file', type=Path)
     o = sub.add_parser('register-own')
     o.add_argument('--from', dest='src', type=Path, required=True)
@@ -526,7 +526,7 @@ def main(argv=None):
     sub.add_parser('index')
     p = sub.add_parser('privacy-scan')
     p.add_argument('--path', type=Path, required=True)
-    p.add_argument('--progress-root', type=Path, default=Path(os.environ.get('AGENT_PROGRESS_ROOT') or '/home/user/agent-progress'))
+    p.add_argument('--progress-root', type=Path, default=Path(os.environ.get('AGENT_PROGRESS_ROOT') or Path.home() / 'agent-progress'))
     p.add_argument('--term', action='append', default=[])
     y = sub.add_parser('sync')
     y.add_argument('-m', '--message', required=True)

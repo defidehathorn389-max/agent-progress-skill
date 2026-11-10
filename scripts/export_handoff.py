@@ -42,7 +42,7 @@ def export(workspace,includes,output):
  return {'path':str(output),'files':len(entries),'oversized_text_excluded':sorted(oversized),'bytes':output.stat().st_size,'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'scope':manifest['scope']}
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--workspace',type=Path,default=Path('/home/user'));p.add_argument('--include',action='append',required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--workspace',type=Path,default=Path.home());p.add_argument('--include',action='append',required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
  try:print(json.dumps(export(a.workspace,a.include,a.output),ensure_ascii=False,indent=2));return 0
  except (OSError,HandoffError,ValueError) as e:print(str(e) if isinstance(e,HandoffError) else type(e).__name__,file=sys.stderr);return 1
 if __name__=='__main__':raise SystemExit(main())

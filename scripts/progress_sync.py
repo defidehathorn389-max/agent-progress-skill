@@ -15,7 +15,8 @@ Workspace snapshots on some platforms drop .git/config (remote + identity). Ever
 missing `origin` from LOCATION.json (progress_remote_url) or --remote-url, and commits fall back to
 the last commit's author when user.email is unset.
 
-Credentials: $GH_TOKEN or $GITHUB_TOKEN, or --token-file PATH (outside the repository).
+Credentials: --token-file PATH (outside the repository), else $GH_TOKEN / $GITHUB_TOKEN, else the file named by
+$GITHUB_TOKEN_FILE, else ~/.config/sesame-env/secrets/github_token.
 The token reaches git only through a throw-away GIT_ASKPASS helper that reads it from the
 environment of the git child process. It is never written to .git/config, remote URLs,
 commits, receipts or logs, and stored credential helpers are disabled for these calls.
@@ -185,7 +186,7 @@ def read_token(token_file, root):
         if path.is_relative_to(Path(root).resolve()):
             raise SyncError('--token-file must live outside the progress repository')
         return path.read_text(encoding='utf-8').strip() or None
-    return os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN') or None
+    return handoff.default_token()
 
 
 # ---------------------------------------------------------------- repository helpers
@@ -854,8 +855,8 @@ def doctor(root, git, token_present, remote_url=None, skill_dir=None):
                        **({'advisory': True} if advisory else {})})
 
     add('git', shutil.which('git') is not None, 'git command available', 'install git')
-    add('credentials', token_present, 'token available via GH_TOKEN/GITHUB_TOKEN/--token-file (value not shown)',
-        'save the token outside the repository and pass --token-file, or export GH_TOKEN')
+    add('credentials', token_present, 'token available via --token-file, GH_TOKEN/GITHUB_TOKEN, GITHUB_TOKEN_FILE or ~/.config/sesame-env/secrets/github_token (value not shown)',
+        'save the token outside the repository (default ~/.config/sesame-env/secrets/github_token, chmod 600) or pass --token-file')
     if not (root / '.git').exists():
         add('clone', False, f'{root} is not a git clone', 'progress_sync.py --token-file F clone --repo OWNER/agent-progress')
         return {'ok': False, 'checks': checks}
@@ -914,8 +915,8 @@ def doctor(root, git, token_present, remote_url=None, skill_dir=None):
         loc = json.loads((root / 'LOCATION.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
         loc = {}
-    for label, key, env, default in (('memory repo', 'memory_remote_url', 'AGENT_MEMORY_ROOT', '/home/user/agent-memory'),
-                                     ('skills repo', 'skills_remote_url', 'AGENT_SKILLS_ROOT', '/home/user/agent-skills')):
+    for label, key, env, default in (('memory repo', 'memory_remote_url', 'AGENT_MEMORY_ROOT', str(Path.home() / 'agent-memory')),
+                                     ('skills repo', 'skills_remote_url', 'AGENT_SKILLS_ROOT', str(Path.home() / 'agent-skills'))):
         url = loc.get(key)
         if not url:
             continue  # companion repositories not configured for this progress repository

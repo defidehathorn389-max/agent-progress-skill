@@ -5,7 +5,7 @@
 ```bash
 python3 scripts/export_handoff.py --workspace /home/user \
   --include agent-progress-skill --include agent-progress \
-  --output /home/user/private-handoff.zip
+  --output ~/private-handoff.zip
 ```
 
 - 只打包显式选择的规则、进度和文本证据。会排除凭据目录（包括 `.secrets/`）、密文、常见秘密文件、Git 内部文件、锁/临时文件和大媒体；超过 2 MiB 的文本文件不打包，但会在结果和清单的 `oversized_text_excluded` 中列出；并在包内生成 `PACKAGE_MANIFEST.json`（逐文件 SHA256）。

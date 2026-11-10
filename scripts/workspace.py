@@ -5,9 +5,9 @@ Arena-style sandboxes keep only a snapshot of the workspace between turns (about
 files; some directory names and .git/config are never kept) and often restart between turns, while
 the disk itself has ~20 GB for work inside a turn. So use two layers:
 
-  persisted area  /home/user                 small things that must survive: slim clones of the
+  persisted area  ~ (home)                   small things that must survive: slim clones of the
                                              progress/memory/skills repositories, the rules repo, the token
-  work area       /home/user/.cache/work/<n> heavy project files for this turn; never snapshotted,
+  work area       ~/.cache/work/<n>          heavy project files for this turn; never snapshotted,
                                              fetched on demand (blobless + sparse), gone after a restart
 
 Everything that matters is pushed to GitHub before the reply ends (progress: save, memory: sync,
@@ -22,7 +22,7 @@ Commands:
                                       lightweight clone of just the needed paths into the work area
   park   [--push] [-m MESSAGE]        work-area repositories with uncommitted/unpushed work (optionally push)
 
-Environment: AGENT_WORKSPACE_HOME (default /home/user), AGENT_WORK_ROOT (default <home>/.cache/work).
+Environment: AGENT_WORKSPACE_HOME (default: the user's home directory), AGENT_WORK_ROOT (default <home>/.cache/work).
 """
 import argparse
 import json
@@ -47,7 +47,7 @@ class WorkspaceError(Exception):
 
 
 def home():
-    return Path(os.environ.get('AGENT_WORKSPACE_HOME') or '/home/user')
+    return Path(os.environ.get('AGENT_WORKSPACE_HOME') or Path.home())
 
 
 def work_root():
@@ -244,7 +244,7 @@ def main(argv=None):
     token = None
     if a.token_file:
         token = a.token_file.read_text(encoding='utf-8').strip() or None
-    token = token or os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
+    token = token or handoff.default_token()
     try:
         if a.command == 'status':
             result = footprint()

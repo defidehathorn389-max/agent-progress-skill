@@ -1,5 +1,16 @@
 # 变更记录
 
+## v2.11.0 — 2026-11-10
+
+- 默认路径改为当前用户主目录：memory.py、handoff.py、skills.py、progress_sync.py、workspace.py、export_handoff.py、credential_vault.py 不再默认 `/home/user/...`，改用 `Path.home()`；`AGENT_*_ROOT` / `AGENT_WORKSPACE_HOME` 环境变量和 `--root` 参数照旧可覆盖。文档里的示例路径同步改成 `~/...`。
+- references/workspace.md 开头标明只适用于旧的 Arena 沙箱。
+- memory.py brief：旧环境类（categories.json 里 `legacy: true`）的条目各节都不显示，只在维护说明里报条数；`memory.py search` 照样能搜到。
+- memory.py doctor --dismiss 编号A 编号B [--by 谁] [--why 原因]：两条都记一笔 `not_contradicting: [{id, by, date}]`，以后体检不再把这一对报为矛盾（任一侧有记录即双向生效）；validate 检查这个字段的格式。
+- 新增 tests/test_memory_v2101.py、tests/test_token_default.py、tests/test_home_defaults.py。
+- 默认 token 文件：不传 `--token-file` 时，progress_sync.py、memory.py sync、skills.py、workspace.py 依次读 `$GH_TOKEN` / `$GITHUB_TOKEN`、`$GITHUB_TOKEN_FILE` 指的文件、`~/.config/sesame-env/secrets/github_token`（`$SESAME_ENV_CONF` 可改目录）。新函数 `handoff.default_token_file()` / `default_token()`，值从不打印。
+- handoff.py resume 的保存命令不再写死 `/home/user/.secrets/github_token`：有默认 token 时不带 `--token-file`，没有时提示传仓库外的文件。
+- SKILL.md 快速上手的 `T` 改为默认 token 文件。
+
 ## v2.10.0 — 2026-11-10
 
 记忆库写入规则和体检（memory.py，全部 Python 标准库）：
