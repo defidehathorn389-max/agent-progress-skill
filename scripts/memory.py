@@ -68,13 +68,17 @@ SCOPE_RE = re.compile(r'^(global|domain:[a-z0-9][a-z0-9-]{0,63}|project:[a-z0-9]
 ID_RE = re.compile(r'^(pref|fact|lesson|session|temp|chg)-\d{8}T\d{6}Z-[0-9a-f]{6}$')
 MAX_FIELD = 4000
 DERIVED = ('MEMORY.md', 'CHANGELOG.md')
-SYNC_PATHS = ('items', 'short-term', 'changes', 'MEMORY.md', 'CHANGELOG.md', 'README.md', 'LOCATION.json', '.gitignore')
+SYNC_PATHS = ('items', 'short-term', 'changes', 'MEMORY.md', 'CHANGELOG.md', 'README.md', 'LOCATION.json', '.gitignore',
+              'categories.json')
+CATEGORIES_FILE = 'categories.json'  # optional, per memory repository: the taxonomy lives with the data
+CATEGORY_RE = re.compile(r'^[a-z][a-z0-9-]{0,31}$')
+REVIEW_TAG = 'needs-review'  # contradicting or possibly stale: the user decides, do not apply blindly
 SESSION_DAYS, TEMP_DAYS = 30, 14
 MERGE_SIMILARITY, WARN_SIMILARITY, DUPLICATE_REPORT = 0.8, 0.3, 0.5
 EDITABLE = {
-    'preference': {'text', 'source', 'scope', 'evidence', 'tags', 'priority'},
-    'fact': {'text', 'evidence', 'tags'},
-    'lesson': {'title', 'rule', 'what_happened', 'cause', 'trigger', 'scope', 'tags', 'source_projects'},
+    'preference': {'text', 'source', 'scope', 'evidence', 'tags', 'priority', 'category'},
+    'fact': {'text', 'evidence', 'tags', 'category'},
+    'lesson': {'title', 'rule', 'what_happened', 'cause', 'trigger', 'scope', 'tags', 'source_projects', 'category'},
     'temporary': {'text', 'evidence'},
     'session': {'summary', 'open_items', 'projects'},
 }
@@ -130,6 +134,8 @@ def validate_item(item, kind):
         raise MemError(f'{item["id"]}: invalid status')
     if 'scope' in item and not SCOPE_RE.fullmatch(str(item['scope'])):
         raise MemError(f'{item["id"]}: scope must be global, domain:<slug> or project:<domain>/<id>')
+    if 'category' in item and not CATEGORY_RE.fullmatch(str(item['category'])):
+        raise MemError(f'{item["id"]}: category must be a lowercase slug')
     if kind == 'preference' and item['source'] not in SOURCES:
         raise MemError(f'{item["id"]}: source must be explicit or inferred')
     if kind == 'preference' and item.get('priority', 2) not in (1, 2, 3):
@@ -151,6 +157,54 @@ def validate_item(item, kind):
         handoff.check_secret(item, item['id'])
     except handoff.HandoffError as e:
         raise MemError(str(e))
+
+
+def load_categories(root):
+    """Optional taxonomy: categories.json = {"categories": [{"id", "label", "desc", "core"}]}, in display order.
+    `core` marks preference categories a new assistant can copy into its own preference memory."""
+    f = Path(root) / CATEGORIES_FILE
+    if not f.exists():
+        return []
+    data = json.loads(f.read_text(encoding='utf-8'))
+    cats = data.get('categories') if isinstance(data, dict) else None
+    if not isinstance(cats, list) or not cats:
+        raise MemError(f'{CATEGORIES_FILE}: needs a non-empty "categories" list')
+    seen = set()
+    for c in cats:
+        if not isinstance(c, dict) or not CATEGORY_RE.fullmatch(str(c.get('id', ''))) or not c.get('label'):
+            raise MemError(f'{CATEGORIES_FILE}: each category needs a slug id and a label')
+        if c['id'] in seen:
+            raise MemError(f'{CATEGORIES_FILE}: duplicate category {c["id"]}')
+        seen.add(c['id'])
+    try:
+        handoff.check_secret(data, CATEGORIES_FILE)
+    except handoff.HandoffError as e:
+        raise MemError(str(e))
+    return cats
+
+
+def check_category(root, item):
+    cat = item.get('category')
+    if cat:
+        known = [c['id'] for c in load_categories(root)]
+        if not known:
+            raise MemError(f'category {cat!r} given but {CATEGORIES_FILE} does not exist')
+        if cat not in known:
+            raise MemError(f'unknown category {cat!r}; known: {known}')
+
+
+def _group(items, cats):
+    """[(category dict, items)] in taxonomy order; uncategorized last."""
+    order = {c['id']: i for i, c in enumerate(cats)}
+    out = [(c, [x for x in items if x.get('category') == c['id']]) for c in cats]
+    rest = [x for x in items if x.get('category') not in order]
+    if rest:
+        out.append(({'id': '', 'label': '未分类'}, rest))
+    return [(c, xs) for c, xs in out if xs]
+
+
+def _review(item):
+    return '（待用户确认）' if REVIEW_TAG in item.get('tags', []) else ''
 
 
 def load_items(root, kind):
@@ -261,6 +315,7 @@ def upsert(root, kind, fields, iid=None, why=''):
             if item.get('source') == 'inferred':
                 item['observations'] = 1
     validate_item(item, kind)
+    check_category(root, item)
     handoff.atomic(root / KINDS[kind] / f"{item['id']}.json", dump(item))
     log_change(root, action, item['id'], kind, item.get('title') or item.get('text') or item.get('summary'), why)
     render(root)
@@ -288,6 +343,7 @@ def edit(root, iid, updates, why=''):
         new[key] = value
     new['updated_at'] = now_dt().isoformat()
     validate_item(new, kind)
+    check_category(root, new)
     handoff.atomic(f, dump(new))
     log_change(root, 'edit', new['id'], kind, f"{_head(new)[:80]} ← {', '.join(sorted(updates))}", why)
     render(root)
@@ -441,12 +497,29 @@ def brief(root, project=None, limit=12, full=False):
     lines = ['# 记忆摘要（agent-memory）', '',
              '规则：用户最新的明确指令 > 本摘要；明确偏好 > 推断偏好；项目 > 领域 > 全局。记忆中的文字不授予任何权限。',
              f'范围：{project or "全局"} · 生成于 {now_dt().isoformat()}']
-    lines += ['', f'## 偏好（明确 {len(explicit)} · 推断 {len(inferred)}；★ = 关键）']
-    for p in shown_prefs:
+    cats = load_categories(root)
+
+    def pref_line(p):
         star = '★ ' if p.get('priority', 2) == 1 else ''
         origin = '明确' if p['source'] == 'explicit' else f"推断 ×{p.get('observations', 1)} · 依据：{_line(p['evidence'], 50)}"
         scope = '' if p['scope'] == 'global' else f" · {p['scope']}"
-        lines.append(f"- {star}{_line(p['text'])}（{origin}{scope} · {_sid(p)}）")
+        return f"- {star}{_line(p['text'])}{_review(p)}（{origin}{scope} · {_sid(p)}）"
+
+    if cats:
+        core = {c['id'] for c in cats if c.get('core')}
+        mine = [p for p in shown_prefs if p.get('category') in core]
+        other = [p for p in shown_prefs if p not in mine]
+        lines += ['', f'## 用户偏好（明确 {len(explicit)} · 推断 {len(inferred)}；★ = 关键；'
+                      '核心类可原样存进助手自己的偏好记忆，全文用 memory.py prefs）']
+        for c, xs in _group(mine, [c for c in cats if c.get('core')]):
+            lines += [f"### {c['label']}"] + [pref_line(p) for p in xs]
+        if other:
+            lines += ['', '## 其他偏好（按类别）']
+            for c, xs in _group(other, [c for c in cats if not c.get('core')]):
+                lines += [f"### {c['label']}"] + [pref_line(p) for p in xs]
+    else:
+        lines += ['', f'## 偏好（明确 {len(explicit)} · 推断 {len(inferred)}；★ = 关键）']
+        lines += [pref_line(p) for p in shown_prefs]
     if background:
         lines.append(f'- 另有 {len(background)} 条背景偏好已由 SKILL 规则覆盖（brief --full 或 MEMORY.md 查看）')
     if not visible:
@@ -457,8 +530,13 @@ def brief(root, project=None, limit=12, full=False):
                                   for i, f in enumerate(focus, 1)] or ['无。'])
     shown = lessons[:limit]
     lines += ['', f'## 需要避开的坑（{len(shown)}/{len(lessons)}，按相关度和次数）']
-    lines += [f"- {_line(x['title'], 80)} → {_line(x['rule'], 160)}（×{x['count']}" +
-              ('' if x['scope'] == 'global' else f" · {x['scope']}") + f" · {_sid(x)}）" for x in shown] or ['无。']
+    lesson_line = lambda x: (f"- {_line(x['title'], 80)} → {_line(x['rule'], 160)}{_review(x)}（×{x['count']}" +
+                             ('' if x['scope'] == 'global' else f" · {x['scope']}") + f" · {_sid(x)}）")
+    if cats and shown:
+        for c, xs in _group(shown, cats):
+            lines += [f"### {c['label']}"] + [lesson_line(x) for x in xs]
+    else:
+        lines += [lesson_line(x) for x in shown] or ['无。']
     recent = sorted(sessions, key=lambda x: x['created_at'], reverse=True)[:3]
     lines += ['', '## 最近的对话'] + ([f"- {s['created_at'][:10]} · {_line(re.sub(r'^' + s['created_at'][:10] + r'[：:]\s*', '', s['summary']), 200)}" +
                                     (f"（未完成：{'；'.join(s['open_items'])[:120]}）" if s.get('open_items') else '')
@@ -466,6 +544,12 @@ def brief(root, project=None, limit=12, full=False):
     if facts:
         lines += ['', '## 关于用户'] + [f"- {_line(f['text'])}（{_sid(f)}）" for f in facts]
     lines += ['', '## 维护']
+    review = [x for k in ('preference', 'fact', 'lesson') for x in active(root, k) if REVIEW_TAG in x.get('tags', [])]
+    if review:
+        lines.append(f'- {len(review)} 条标了「待用户确认」（互相矛盾或可能过时）：先按用户最新的话办，'
+                     f'不要据此行动；用户定了再 edit / merge / retire 并去掉 {REVIEW_TAG} 标签。')
+    if cats:
+        lines.append('- 新条目带 --category（类别见 categories.json）；没分类的 validate 会列出来。')
     if soon:
         lines.append(f'- {len(soon)} 条短期记忆 7 天内过期：有长期价值的先用 prefer / fact / learn 记下。')
     lines += ['- 踩坑（被纠正、失败、返工、同一件事被交代第二遍、差点出错）时当场 learn（同一个坑再次发生会自动计数）；偏好变化用 prefer（推断的标 inferred）；只是改正文字用 edit；重复条目用 merge；过时用 retire。条目可用括号里的 6 位短 ID 指代。',
@@ -473,25 +557,63 @@ def brief(root, project=None, limit=12, full=False):
     return '\n'.join(lines) + '\n'
 
 
+def prefs(root, ids=False):
+    """The user's own preferences, clean: core categories (or, without a taxonomy, global explicit ones), every priority.
+    Meant to be copied into another assistant's preference memory."""
+    root = Path(root)
+    cats = load_categories(root)
+    live = sorted(active(root, 'preference'), key=lambda p: (p.get('priority', 2), p['created_at']))
+    if cats:
+        core = [c for c in cats if c.get('core')]
+        groups = _group([p for p in live if p.get('category') in {c['id'] for c in core}], core)
+    else:
+        groups = [({'label': '偏好'}, [p for p in live if p['scope'] == 'global' and p['source'] == 'explicit'])]
+    lines = ['# 用户偏好（agent-memory）', '',
+             '用户最新的明确指令优先；标「推断」的是从用户的选择里推出来的，用户否定就改；标「待用户确认」的先问再存。']
+    for c, xs in groups:
+        lines += ['', f"## {c['label']}"]
+        for p in xs:
+            tail = [] if p['source'] == 'explicit' else ['推断']
+            tail += [_sid(p)] if ids else []
+            lines.append(f"- {_line(p['text'], 600)}{_review(p)}" + (f"（{' · '.join(tail)}）" if tail else ''))
+    if not any(xs for _, xs in groups):
+        lines += ['', '无。']
+    return '\n'.join(lines) + '\n'
+
+
 def render(root):
     root = Path(root)
+    cats = load_categories(root)
     lines = ['# 记忆总览（派生视图，memory.py 生成，勿手改）', '']
     labels = {'preference': '偏好', 'fact': '关于用户', 'lesson': '踩坑教训', 'temporary': '临时约定', 'session': '对话摘要'}
+    if cats:
+        lines += ['## 类别', '']
+        for c in cats:
+            n = {k: sum(1 for x in load_items(root, k) if x.get('status', 'active') == 'active' and x.get('category') == c['id'])
+                 for k in ('preference', 'fact', 'lesson')}
+            lines.append(f"- **{c['label']}**（`{c['id']}`）：偏好 {n['preference']} · 事实 {n['fact']} · 教训 {n['lesson']}" +
+                         (f" — {c['desc']}" if c.get('desc') else ''))
+        lines.append('')
+
+    def entry(kind, x):
+        if kind == 'lesson':
+            return f"- **{x['title']}** → {x['rule']}{_review(x)}（×{x['count']} · {x['scope']} · `{x['id']}`）"
+        if kind == 'preference':
+            return f"- {x['text']}{_review(x)}（{'明确' if x['source'] == 'explicit' else '推断'} · {x['scope']} · `{x['id']}`）"
+        if kind in ('temporary', 'session'):
+            return f"- {x.get('text') or x.get('summary')}（至 {x['expires_at'][:10]} · `{x['id']}`）"
+        return f"- {x['text']}{_review(x)}（`{x['id']}`）"
+
     for kind in ('preference', 'lesson', 'fact', 'temporary', 'session'):
         items = load_items(root, kind)
         live = [x for x in items if x.get('status', 'active') == 'active']
         retired = len(items) - len(live)
         lines += [f'## {labels[kind]}（{len(live)}' + (f'，已停用 {retired}' if retired else '') + '）', '']
-        for x in live:
-            if kind == 'lesson':
-                lines.append(f"- **{x['title']}** → {x['rule']}（×{x['count']} · {x['scope']} · `{x['id']}`）")
-            elif kind == 'preference':
-                lines.append(f"- {x['text']}（{'明确' if x['source'] == 'explicit' else '推断'} · {x['scope']} · `{x['id']}`）")
-            elif kind in ('temporary', 'session'):
-                lines.append(f"- {x.get('text') or x.get('summary')}（至 {x['expires_at'][:10]} · `{x['id']}`）")
-            else:
-                lines.append(f"- {x['text']}（`{x['id']}`）")
-        lines.append('')
+        if cats and kind in ('preference', 'lesson', 'fact'):
+            for c, xs in _group(live, cats):
+                lines += [f"### {c['label']}（{len(xs)}）", ''] + [entry(kind, x) for x in xs] + ['']
+        else:
+            lines += [entry(kind, x) for x in live] + ['']
     focus = load_focus(root).get('items', [])
     lines += ['## 近期重点', ''] + [f"{i}. {f['project'] or '-'} — {f['note']}" for i, f in enumerate(focus, 1)] + ['']
     handoff.atomic(root / 'MEMORY.md', ('\n'.join(lines).rstrip() + '\n').encode())
@@ -529,8 +651,18 @@ def validate(root):
                 sc = similarity(_head(x), _head(y))
                 if sc >= DUPLICATE_REPORT:
                     dupes.append({'a': x['id'], 'b': y['id'], 'similarity': round(sc, 2)})
-    return {'pass': True, 'counts': counts, 'views_current': current, 'expired_pending': expired,
-            'possible_duplicates': dupes[:20]}
+    cats = load_categories(root)
+    known = {c['id'] for c in cats}
+    live = [x for k in ('preference', 'fact', 'lesson') for x in active(root, k)]
+    unknown = [x['id'] for x in live if x.get('category') and x['category'] not in known]
+    if unknown:
+        raise MemError(f'unknown category on {unknown[:5]} (add it to {CATEGORIES_FILE} or fix the item)')
+    result = {'pass': True, 'counts': counts, 'views_current': current, 'expired_pending': expired,
+              'possible_duplicates': dupes[:20]}
+    if cats:
+        result['uncategorized'] = [x['id'] for x in live if not x.get('category')]
+    result['needs_review'] = [x['id'] for x in live if REVIEW_TAG in x.get('tags', [])]
+    return result
 
 
 def sync(root, message, token=None):
@@ -550,6 +682,8 @@ def main(argv=None):
     b.add_argument('--project')
     b.add_argument('--limit', type=int, default=12)
     b.add_argument('--full', action='store_true', help='also list background (priority 3) preferences')
+    pf = sub.add_parser('prefs', help="the user's own preferences only (core categories), clean, every priority")
+    pf.add_argument('--ids', action='store_true', help='append short IDs')
     for name in ('prefer', 'fact'):
         c = sub.add_parser(name)
         c.add_argument('--text', required=True)
@@ -557,6 +691,7 @@ def main(argv=None):
         c.add_argument('--tags', default='')
         c.add_argument('--id')
         c.add_argument('--why', default='')
+        c.add_argument('--category', default='')
     sub.choices['prefer'].add_argument('--source', choices=sorted(SOURCES), default='explicit')
     sub.choices['prefer'].add_argument('--scope', default='global')
     sub.choices['prefer'].add_argument('--priority', type=int, choices=(1, 2, 3), default=None)
@@ -577,6 +712,7 @@ def main(argv=None):
     l.add_argument('--scope', default='global')
     l.add_argument('--project', help='source project domain/id (linked, not the scope)')
     l.add_argument('--tags', default='')
+    l.add_argument('--category', default='')
     l.add_argument('--id')
     l.add_argument('--why', default='')
     t = sub.add_parser('temp')
@@ -607,9 +743,13 @@ def main(argv=None):
         if a.command == 'brief':
             sys.stdout.write(brief(a.root, a.project, a.limit, a.full))
             return 0
+        if a.command == 'prefs':
+            sys.stdout.write(prefs(a.root, a.ids))
+            return 0
         if a.command == 'prefer':
             result = upsert(a.root, 'preference', {'text': a.text, 'source': a.source, 'scope': a.scope, 'priority': a.priority,
-                                                   'evidence': a.evidence or '（未注明）', 'tags': tags()}, a.id, a.why)
+                                                   'evidence': a.evidence or '（未注明）', 'tags': tags(),
+                                                   'category': a.category}, a.id, a.why)
         elif a.command == 'edit':
             updates = {}
             for pair in a.set:
@@ -621,11 +761,13 @@ def main(argv=None):
         elif a.command == 'merge':
             result = merge(a.root, a.src, a.into, a.why)
         elif a.command == 'fact':
-            result = upsert(a.root, 'fact', {'text': a.text, 'evidence': a.evidence or '（未注明）', 'tags': tags()}, a.id, a.why)
+            result = upsert(a.root, 'fact', {'text': a.text, 'evidence': a.evidence or '（未注明）', 'tags': tags(),
+                                             'category': a.category}, a.id, a.why)
         elif a.command == 'learn':
             result = upsert(a.root, 'lesson', {'title': a.title, 'rule': a.rule, 'what_happened': a.what, 'cause': a.cause,
                                                'trigger': a.trigger, 'scope': a.scope, 'tags': tags(),
-                                               'source_projects': [a.project] if a.project else []}, a.id, a.why)
+                                               'source_projects': [a.project] if a.project else [],
+                                               'category': a.category}, a.id, a.why)
         elif a.command == 'temp':
             result = add_short_term(a.root, 'temporary', {'text': a.text, 'evidence': a.evidence}, a.days)
         elif a.command == 'focus':

@@ -1,5 +1,12 @@
 # 变更记录
 
+## v2.9.0 — 2026-11-10
+
+- memory.py 支持可选分类：记忆库根目录的 `categories.json` 定义类别（`id` / `label` / `desc` / `core`），偏好、事实、教训可带 `category`（`prefer` / `fact` / `learn --category`，`edit --set category=`）。`brief` 先列核心类偏好，其余偏好和坑按类别分组；`MEMORY.md` 按类别分组并列出各类条数；`validate` 报告 `uncategorized`，未知类别报错。没有 `categories.json` 的记忆库行为不变。
+- 新命令 `memory.py prefs`：只输出用户自己的偏好（核心类别，全文，各优先级），方便另一个助手原样存进自己的偏好记忆。
+- `needs-review` 标签：互相矛盾或可能过时的条目在 `brief` 里显示「（待用户确认）」并在维护段计数，`validate` 列出 `needs_review`。
+- 新增 tests/test_memory_categories.py。
+
 ## v2.8.0 — 2026-11-10
 
 - 新增 `scripts/journal.py`：分层工作记录。每个工作日一个日记录 `journal/days/YYYY-MM-DD.md`（要点 + 带时间和类型的条目），`rollup` 生成月汇总 `journal/months/YYYY-MM.md` 和年汇总 `journal/years/YYYY.md`（自动明细 + 手写总结，重跑保留手写部分），`recent` 按“本年 → 本月 → 最近 3 天”的接手顺序输出，`check` 列出缺汇总的已结束月份和年份；条目拦截常见秘密格式。

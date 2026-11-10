@@ -19,7 +19,8 @@ python3 $S/progress_sync.py --root /home/user/agent-progress --token-file $T clo
 for R in agent-memory agent-skills; do   # 已有克隆：自动修复并拉取
   python3 $S/progress_sync.py --root /home/user/$R --token-file $T clone --repo defidehathorn389-max/$R; done
 python3 $S/progress_sync.py --token-file $T doctor        # 三个仓库 + 常驻区空间 + 凭据/落后/未推送/完整性/Skill 版本，附修复命令
-python3 $S/memory.py brief                                 # 记忆摘要：偏好、临时约定、近期重点、要避开的坑
+python3 $S/memory.py brief                                 # 记忆摘要：偏好、临时约定、近期重点、要避开的坑（有 categories.json 时按类别分组）
+python3 $S/memory.py prefs                                 # 只看用户自己的偏好（核心类别全文），换助手时存进它自己的偏好记忆
 python3 $S/handoff.py list                                 # 选项目；新项目用 handoff.py new
 python3 $S/handoff.py resume --project <方向>/<项目ID>     # 接手简报（含完整性校验）
 python3 $S/memory.py brief --project <方向>/<项目ID>       # 再看这个项目/领域相关的坑
@@ -63,7 +64,7 @@ python3 $S/memory.py session --summary '本次对话做了什么' --open '没做
 
 ## 3. 工作中：写检查点的时机与方法
 
-**踩坑的当场**：先 `memory.py learn`（教训）或 `prefer`（偏好），再继续工作。需要某个 skill 时：`skills.py search` → 找不到再 `fetch` → `review` → `add`（见 references/skills.md）。
+**踩坑的当场**：先 `memory.py learn`（教训）或 `prefer`（偏好）——记忆库有 `categories.json` 时带上 `--category`——再继续工作。需要某个 skill 时：`skills.py search` → 找不到再 `fetch` → `review` → `add`（见 references/skills.md）。
 
 以下时机写检查点：接到改变方向的要求或纠错；开始长任务、外部写入或不可逆操作之前；有产物、验证结果、失败、阻塞或远端提交之后；上下文快要压缩、切换模型、暂停；**每次有实质变化的回复结束前**。闲聊不存档；没有变化就不写（`update` 会拒绝空变化）。
 
@@ -133,7 +134,7 @@ python3 $S/handoff.py log --project D/P -n 20          # 历史时间线（resum
 python3 $S/handoff.py find '关键词' | recent -n 10     # 用户没给项目 ID 时定位项目
 python3 $S/handoff.py compact --project D/P --expected <HEAD> --dry-run   # 状态过大时
 python3 $S/progress_sync.py --token-file $T doctor | pull | status --fetch | reconcile --project D/P
-python3 $S/memory.py search 关键词 | edit --id ID --set k=v | merge --from ID --into ID | retire --id ID --reason … | expire | validate
+python3 $S/memory.py search 关键词 | edit --id ID --set k=v | merge --from ID --into ID | retire --id ID --reason … | expire | validate | prefs [--ids]
 python3 $S/skills.py search 关键词 | fetch --repo O/R --path P | review DIR | add … [--tags 中文词] | tag | outdated | verify
 python3 $S/skills.py publish --dir <skill 仓库> -m '…'   # 改 skill 后发布：隐私扫描 + 凭据检查 + 核验
 python3 $S/workspace.py status | slim | open <名称> --repo O/R --path <目录> | park [--push -m …]   # 沙箱存储

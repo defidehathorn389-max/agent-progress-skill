@@ -7,6 +7,25 @@
 1. 会话开始：`doctor` 之后运行 `memory.py brief`，按其中的偏好、临时约定和坑来工作。
 2. 选定项目后：`memory.py brief --project <方向>/<项目ID>`，会额外列出该领域、该项目的坑（相关度高的排前面）。
 3. 需要回忆细节时：`memory.py search 关键词`。
+4. 只要用户自己的偏好（比如换了助手，要把用户的长期习惯存进新助手自己的偏好记忆）：`memory.py prefs`。有分类时只列标了 `core` 的类别（通常是称呼沟通和长期规矩），全文、各优先级都列；没有分类时列全局的明确偏好。
+
+## 分类（可选）
+
+记忆库根目录放一个 `categories.json`，就按类别组织：
+
+```json
+{"categories": [
+  {"id": "profile", "label": "称呼与沟通", "core": true, "desc": "…"},
+  {"id": "rules", "label": "长期规矩", "core": true},
+  {"id": "env", "label": "环境与工具链"}
+]}
+```
+
+- 偏好、事实、教训都可以带 `category`（`prefer` / `fact` / `learn` 加 `--category`，已有条目用 `edit --set category=…`）。类别必须在 `categories.json` 里；没有这个文件时不能写 `category`。
+- 分类和范围（scope）是两回事：范围决定 `brief --project` 时哪些坑相关，分类决定怎么分组显示。条目文件位置和 ID 不随分类变。
+- `brief` 把核心类偏好放在最前，其余偏好和坑按类别分组；`MEMORY.md` 开头列各类别的条数。
+- `validate` 列出没分类的条目（`uncategorized`）；条目写了不存在的类别会报错。
+- 互相矛盾或可能过时、要用户决定的条目，加 `needs-review` 标签（再加一个说明原因的标签）。`brief` 显示为「（待用户确认）」并在维护段计数，`validate` 列出 `needs_review`。用户决定前按用户最新的话办；决定后 edit / merge / retire 并去掉标签。不要因为矛盾就直接删。
 
 ## 存什么
 
