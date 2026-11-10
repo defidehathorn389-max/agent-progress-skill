@@ -26,12 +26,33 @@
 - `brief` 把核心类偏好放在最前，其余偏好和坑按类别分组；`MEMORY.md` 开头列各类别的条数。
 - `validate` 列出没分类的条目（`uncategorized`）；条目写了不存在的类别会报错。
 - 互相矛盾或可能过时、要用户决定的条目，加 `needs-review` 标签（再加一个说明原因的标签）。`brief` 显示为「（待用户确认）」并在维护段计数，`validate` 列出 `needs_review`。用户决定前按用户最新的话办；决定后 edit / merge / retire 并去掉标签。不要因为矛盾就直接删。
+- 类别可以带 `review_days`（多少天复核一次，0 = 不复核）和 `expire_days`（这一类新条目默认多少天后到期）；`"legacy": true` 的类别只留着备查，不复核，体检也不报它提到旧环境。
+
+```json
+{"policy": {"candidate_pool": true, "review_days": 180,
+            "limits": {"prefs_chars": 2500, "brief_head_chars": 6000}},
+ "doctor": {"stale_patterns": [{"pattern": "正则", "label": "旧环境名"}],
+            "auto_category": [{"category": "类别 id", "scope_prefixes": ["project:方向/项目"]}]}}
+```
+
+- `policy.candidate_pool`：开了以后新条目先进**候选池**；`review_days`：类别没写时的复核周期；`limits`：每次都要读的部分的字数上限（`prefs` 全文、`brief` 坑之前的头部）。
+- `doctor.stale_patterns`：提到哪些旧环境要在体检里报出来；`doctor.auto_category`：没分类、但范围一看就知道属于哪类时，`doctor --fix` 按这里补上。这些都是私有配置，只放在记忆库里。
+
+## 写入规则（由 memory.py 强制执行）
+
+1. **必须带类别**：有 `categories.json` 时，新的偏好 / 事实 / 教训不带 `--category` 或类别不对，会被拒收（不保存），并列出可选类别。
+2. **存之前自动查重**：新条目和已有的有效条目（正式或候选）标题 / 正文高度相似、或规则几乎一样时，**不另存**，退出码 3，输出 `similar_found` 和最像的几条。按提示三选一：同一件事 → 同样的命令加 `--id 那条的短ID` 并入（教训次数 +1）；新说法推翻旧说法 → 加 `--supersedes 旧ID`；确实是另一件事 → 加 `--force` 另存。
+3. **临时内容带过期日**：`--expires YYYY-MM-DD` 或 `--days N`；类别配了 `expire_days` 时自动给。临时约定默认 14 天、对话摘要默认 30 天。到期后 `expire` 或 `doctor --fix` **归档**（短期条目移到 `archive/`，长期条目标 `archived`），不删除，`search --archived` 还能查到。
+4. **先进候选池**：开了 `candidate_pool` 时，新条目状态是 `candidate`：本次起就照做（`brief` 里标「候选」），但不进 `prefs`，每周体检时再升为正式。用户当场明确说"记住这条"时可以加 `--direct` 直接生效。
+5. **有矛盾不删旧条目**：`supersede --old 旧ID --new 新ID --reason …`（或写新条目时加 `--supersedes 旧ID`）。旧条目留在原文件，标 `superseded` 并指向新条目；`brief` / `prefs` 默认不显示，加 `--superseded` 才列出来追溯。
+6. **复核日期**：正式和候选条目带 `review_by`（按类别周期给），到期后体检里列为"超期没复核"；用户确认还对就 `review --id ID`（顺延一个周期），不对就 supersede / retire。同一条被再次记录时自动顺延。
+7. **长度上限**：`prefs` 和 `brief` 头部超过 `limits` 时，`brief` 末尾提醒，体检列出该挪走的条目和挪法（缩成一句、降为背景偏好、范围收窄到项目、改到非核心类别）。
 
 ## 存什么
 
 | 类型 | 命令 | 内容 | 期限 |
 |---|---|---|---|
-| 偏好 | `prefer` | 用户的习惯和要求；`--source explicit`（用户明确说过）或 `inferred`（从选择、反应推断；**直接生效**，用户否定就 `retire` 并记下明确版本） | 长期 |
+| 偏好 | `prefer` | 用户的习惯和要求；`--source explicit`（用户明确说过）或 `inferred`（从选择、反应推断；**直接照做**，但要用户点头才升为正式，用户否定就 `retire` 并记下明确版本） | 长期 |
 | 事实 | `fact` | 关于用户的稳定信息（常用平台、工作方式、账号名等；不存 token 和密码） | 长期 |
 | 教训 | `learn` | 踩坑：发生了什么（`--what`）、原因（`--cause`）、以后怎么做（`--rule`）、范围、来源项目；同一标题再记一次，次数加一 | 长期 |
 | 临时约定 | `temp` | “这周先别推送”这类有期限的约定 | 默认 14 天 |
@@ -83,6 +104,12 @@
 
 ## 维护
 
-- `memory.py expire`：删除过期的临时约定和对话摘要（每次删除都会记录）。过期前 7 天 `brief` 会提醒：有长期价值的内容先用 `prefer` / `fact` / `learn` 记下。
+- `memory.py expire`：归档到期的临时约定、对话摘要和带过期日的长期条目（不删除，每次都记录）。过期前 7 天 `brief` 会提醒：有长期价值的内容先用 `prefer` / `fact` / `learn` 记下。
+- **日记录 → 记忆**：`journal.py add` 写 `[发现]` / `[决定]` 时会提示提成记忆的命令；`memory.py from-journal --project D/P --date YYYY-MM-DD --entry N --as lesson|preference|fact --category C [--rule …]` 把那一行提成候选条目，带 `source_journal`（项目@日期#行号）和 `source_date`，日记录那一行标上条目 ID。`journal.py candidates` 列出还没提的。
+- **体检 `memory.py doctor`**（每周一次，或觉得记忆乱了时）：只读，列出可自动处理的（到期、完全相同、类别一目了然、缺复核日期）、候选池（哪些按规则可升级、哪些要用户点头及原因）、每次读取部分的长度、以及要用户定的（已标待确认按原因分组、新发现的矛盾候选、高度相似、提到旧环境、超期没复核、类别拿不准）。
+  - `doctor --fix`：只做安全的部分——归档到期条目、合并完全相同的、按 `auto_category` 补类别、补复核日期。不升候选、不碰待确认、不停用任何条目。
+  - `doctor --mark-review`：把要用户定的打上 `needs-review` 和原因标签。`--json` 输出全部明细。
+  - `pool`：列出候选；`pool --accept-safe` 只升规则判定安全的（有类别、不是核心类或推断的偏好、没标待确认、不和已有条目相似或矛盾、不提旧环境）；用户点头的用 `pool --accept ID,ID`；丢弃用 `pool --drop ID --reason …`（标 retired，不删）。
+- `memory.py migrate`：把老条目升级到当前格式（补 `reviewed_at` / `review_by`，复核日期从最后更新时间算起），可重复运行。
 - `memory.py validate`：检查所有条目的结构、范围、秘密和派生视图，不会改动任何文件。
-- 仓库不存在时：`progress_sync.py --root /home/user/agent-memory --token-file $T clone --repo OWNER/agent-memory`。
+- 仓库不存在时：`progress_sync.py --root ~/agent-memory --token-file $T clone --repo OWNER/agent-memory`。

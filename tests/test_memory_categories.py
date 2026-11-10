@@ -44,6 +44,8 @@ class Categories(unittest.TestCase):
         self.assertIn('回复用中文', m.prefs(self.r))
 
     def test_grouped_brief_prefs_and_views(self):
+        # an item saved before the taxonomy existed stays uncategorized
+        m.upsert(self.r, 'lesson', {'title': '没分类的坑', 'rule': '先查', 'trigger': 'failure', 'scope': 'global'})
         self.write_cats(CATS)
         a = self.pref('回复用中文', 'profile', source='inferred')
         self.pref('删除前先问', 'rules', priority=3)
@@ -51,7 +53,8 @@ class Categories(unittest.TestCase):
         self.pref('旧环境说明', 'env', tags=[m.REVIEW_TAG])
         m.upsert(self.r, 'lesson', {'title': '代理改写域名', 'rule': '隧道走直连', 'trigger': 'failure', 'scope': 'global',
                                     'category': 'env'})
-        m.upsert(self.r, 'lesson', {'title': '没分类的坑', 'rule': '先查', 'trigger': 'failure', 'scope': 'global'})
+        with self.assertRaises(m.MemError):  # with a taxonomy, a new item must name a category
+            m.upsert(self.r, 'lesson', {'title': '又一个没分类的坑', 'rule': '先查', 'trigger': 'failure', 'scope': 'global'})
         with self.assertRaises(m.MemError):
             self.pref('乱写类别', 'nope')
         b = m.brief(self.r)

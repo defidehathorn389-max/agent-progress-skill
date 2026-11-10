@@ -38,8 +38,11 @@ class Refinements(unittest.TestCase):
         same = self.lesson('沙箱重启后/tmp被清空！')
         self.assertEqual((same['action'], same['merged_by_similarity'], same['count']), ('update', a['id'], 2))
         near = self.lesson('沙箱重启后 /tmp 目录被清空了')
-        self.assertEqual(near['action'], 'add')
+        self.assertEqual((near['action'], near['saved']), ('similar_found', False))  # 2.10: not saved by default
         self.assertEqual(near['similar'][0]['id'], a['id'])
+        near = m.upsert(self.r, 'lesson', {'title': '沙箱重启后 /tmp 目录被清空了', 'rule': 'r', 'trigger': 'failure',
+                                           'scope': 'global'}, force=True)
+        self.assertEqual(near['action'], 'add')
         dupes = m.validate(self.r)['possible_duplicates']
         self.assertEqual({(d['a'], d['b']) for d in dupes} & {(a['id'], near['id']), (near['id'], a['id'])} != set(), True)
         same_rule = self.lesson('完全不同的标题', rule='会话辅助脚本放 /tmp，丢了就重建')

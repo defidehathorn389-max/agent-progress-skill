@@ -1,5 +1,19 @@
 # 变更记录
 
+## v2.10.0 — 2026-11-10
+
+记忆库写入规则和体检（memory.py，全部 Python 标准库）：
+
+- **写入规则**：有 `categories.json` 时，新的偏好 / 事实 / 教训必须带合法类别，否则拒收并列出可选类别。写入前自动查重：和已有有效条目高度相似（标题 / 正文，或规则几乎相同）时不另存，退出码 3，输出 `similar_found` 和三种处理办法（`--id` 并入、`--supersedes` 取代、`--force` 另存）。`--expires` / `--days` 给临时内容设过期日，类别可配 `expire_days` 自动给；到期归档，不删除。
+- **候选池**：`policy.candidate_pool` 打开后新条目状态为 `candidate`，本次起照做（`brief` 标「候选」），不进 `prefs`；`--direct` 直接生效。新命令 `pool`：列出候选及能否按规则升级，`--accept-safe` / `--accept ID` / `--drop ID --reason`（丢弃 = 标 retired，可追溯）。
+- **已取代**：新状态 `superseded` + `superseded_by`。新命令 `supersede --old --new`，写入时也可 `--supersedes`；`brief` / `prefs` 默认不显示，`--superseded` 列出来追溯。
+- **复核日期**：条目带 `reviewed_at` / `review_by`，周期来自类别 `review_days`（`policy.review_days` 兜底，legacy 类不复核）；新命令 `review --id` 顺延；同一条再次记录时自动顺延。
+- **长度上限**：`policy.limits.prefs_chars` / `brief_head_chars`；超了 `brief` 提醒，体检列出该挪走的条目和挪法。
+- **体检 `doctor`**（别名 `lint`）：可自动处理的（到期、完全相同、类别一目了然、缺复核日期）、候选池、每次读取部分的长度、要用户定的（待确认按原因分组、矛盾候选、高度相似、提到旧环境、超期没复核、已取代指向丢失、类别拿不准）。`--fix` 只做安全部分；`--mark-review` 给要用户定的打标签；`--json` 输出明细。旧环境关键词和自动分类规则从记忆库自己的 `categories.json` 读取。
+- **日记录 → 记忆**：`journal.py add` 写 `[发现]` / `[决定]` 时给出提成记忆的命令；新命令 `journal.py candidates` 列出还没提的；`memory.py from-journal`（旧名 `promote` 仍可用）把一行提成候选条目，带 `source_journal` / `source_date`，并在日记录里标上条目 ID。
+- **迁移**：`memory.py migrate` 给老条目补复核日期（从最后更新时间算起），只加字段、不改其他内容，可重复运行。
+- 新增 tests/test_memory_v210.py；全部 128 项测试通过。
+
 ## v2.9.0 — 2026-11-10
 
 - memory.py 支持可选分类：记忆库根目录的 `categories.json` 定义类别（`id` / `label` / `desc` / `core`），偏好、事实、教训可带 `category`（`prefer` / `fact` / `learn --category`，`edit --set category=`）。`brief` 先列核心类偏好，其余偏好和坑按类别分组；`MEMORY.md` 按类别分组并列出各类条数；`validate` 报告 `uncategorized`，未知类别报错。没有 `categories.json` 的记忆库行为不变。

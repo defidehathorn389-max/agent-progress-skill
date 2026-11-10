@@ -21,6 +21,9 @@ Commands:
           regenerate the AUTO block of a month (from day key points) or year (from month summaries);
           the hand-written part between the summary markers is kept
   check   --project D/P                             list finished months/years still lacking a written summary
+  candidates --project D/P [--days 7 | --date YYYY-MM-DD] [--all]
+          list [发现]/[决定] lines not yet saved to memory, each with its entry number and a ready
+          memory.py from-journal command (--all also lists lines already promoted)
   list    --project D/P                             list journal files
 Time zone: --tz, else env AGENT_TZ, else the machine's local zone.
 Writes are local files: publish them with progress_sync.py push --project D/P (stages the whole project dir).
@@ -112,6 +115,73 @@ def _load_day(root, project, d):
     return p, _sections(text)
 
 
+ENTRY_RE = re.compile(r'^- (\d{2}:\d{2}) \[([^\]]+)\] (.*?)(?:（→记忆 ([^）]+)）)?$')
+PROMOTABLE = ('发现', '决定')
+PROMOTE_AS = {'发现': 'lesson', '决定': 'preference'}
+
+
+def _entry(line, n):
+    m = ENTRY_RE.match(line)
+    if not m:
+        return None
+    return {'entry': n, 'time': m.group(1), 'label': m.group(2), 'text': m.group(3).strip(), 'promoted': m.group(4) or ''}
+
+
+def entries(root, project, d):
+    p = day_path(root, project, d)
+    if not p.exists():
+        return []
+    _, _, log = _sections(p.read_text(encoding='utf-8'))
+    return [e for e in (_entry(l, i) for i, l in enumerate(log, 1)) if e]
+
+
+def get_entry(root, project, date, n):
+    d = _parse_date(str(date))
+    p = day_path(root, project, d)
+    if not p.exists():
+        raise JournalError(f'no journal file for {d}')
+    _, _, log = _sections(p.read_text(encoding='utf-8'))
+    if not 1 <= int(n) <= len(log):
+        raise JournalError(f'{d} has {len(log)} entries, no #{n}')
+    e = _entry(log[int(n) - 1], int(n))
+    if not e:
+        raise JournalError(f'{d}#{n} is not a "- HH:MM [类型] …" line')
+    return e
+
+
+def mark_promoted(root, project, date, n, item_id):
+    d = _parse_date(str(date))
+    p, (head, keys, log) = _load_day(root, project, d)
+    e = get_entry(root, project, date, n)
+    if e['promoted']:
+        raise JournalError(f'{d}#{n} already promoted to {e["promoted"]}')
+    log[int(n) - 1] = log[int(n) - 1].rstrip() + f'（→记忆 {item_id}）'
+    _write_day(p, head, keys, log)
+    return {'status': 'MARKED', 'entry': f'{d}#{n}', 'memory_id': item_id}
+
+
+def promote_hint(project, d, e):
+    as_kind = PROMOTE_AS.get(e['label'], 'lesson')
+    extra = ' --rule "<以后怎么做>"' if as_kind == 'lesson' else ''
+    return (f'memory.py from-journal --project {project} --date {d} --entry {e["entry"]} --as {as_kind}'
+            f' --category <类别>{extra}')
+
+
+def candidates(root, project, days=7, date=None, tz=None, include_done=False):
+    """[发现]/[决定] lines of the given day (or the last N calendar days) that are not yet in memory."""
+    if date:
+        ds = [_parse_date(date)]
+    else:
+        end = today(tz).date()
+        ds = [end - datetime.timedelta(days=i) for i in range(max(1, int(days)))]
+    out = []
+    for d in sorted(ds):
+        for e in entries(root, project, d):
+            if e['label'] in PROMOTABLE and (include_done or not e['promoted']):
+                out.append(dict(e, date=d.isoformat(), command=promote_hint(project, d.isoformat(), e)))
+    return out
+
+
 def add(root, project, text, kind='done', date=None, time=None, tz=None):
     if kind not in KINDS:
         raise JournalError(f'kind must be one of {", ".join(KINDS)}')
@@ -123,7 +193,11 @@ def add(root, project, text, kind='done', date=None, time=None, tz=None):
     p, (head, key, log) = _load_day(root, project, d)
     log.append(f'- {t} [{KIND_LABEL[kind]}] {_check_text(text)}')
     _write_day(p, head, key, log)
-    return {'status': 'ADDED', 'file': str(p.relative_to(Path(root))), 'entries': len(log)}
+    res = {'status': 'ADDED', 'file': str(p.relative_to(Path(root))), 'entries': len(log), 'entry': len(log)}
+    if KIND_LABEL[kind] in PROMOTABLE:
+        e = {'entry': len(log), 'label': KIND_LABEL[kind]}
+        res['promote'] = ('要长期记住的话（先进候选池，每周体检时升为正式）：' + promote_hint(project, d.isoformat(), e))
+    return res
 
 
 def key(root, project, text, date=None, tz=None):
@@ -274,8 +348,20 @@ def main(argv=None):
     g = ru.add_mutually_exclusive_group(required=True); g.add_argument('--month'); g.add_argument('--year')
     c = sub.add_parser('check'); c.add_argument('--project', required=True)
     li = sub.add_parser('list'); li.add_argument('--project', required=True)
+    ca = sub.add_parser('candidates'); ca.add_argument('--project', required=True)
+    ca.add_argument('--days', type=int, default=7); ca.add_argument('--date'); ca.add_argument('--all', action='store_true')
     a = ap.parse_args(argv)
     try:
+        if a.command == 'candidates':
+            xs = candidates(a.root, a.project, a.days, a.date, a.tz, a.all)
+            if not xs:
+                print('没有待转存的 [发现]/[决定]'); return 0
+            for e in xs:
+                flag = f'（已存 {e["promoted"]}）' if e['promoted'] else ''
+                print(f'{e["date"]}#{e["entry"]} {e["time"]} [{e["label"]}] {e["text"][:100]}{flag}')
+                if not e['promoted']:
+                    print('    ' + e['command'])
+            return 0
         if a.command == 'add':
             res = add(a.root, a.project, a.text, a.kind, a.date, a.time, a.tz)
         elif a.command == 'key':

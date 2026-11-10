@@ -11,22 +11,42 @@ Repository layout (root: --root, $AGENT_MEMORY_ROOT or /home/user/agent-memory):
   short-term/temporary/<id>.json temporary agreements (expire; default 14 days)
   short-term/focus.json          current focus and priorities (project IDs from agent-progress)
   changes/<id>.json              self-evolution log, one file per change
+  archive/short-term/...         expired short-term items, moved here (never deleted)
+  categories.json                optional taxonomy + doctor rules (lives with the data, not in this public tool)
   MEMORY.md, CHANGELOG.md        derived views
 
 Commands:
-  brief    [--project D/P] [--limit N] [--full]   session-start summary: read before working
-  prefer   --text T [--source explicit|inferred] [--evidence E] [--scope S] [--tags a,b] [--id ID] [--why W]
-  fact     --text T [--evidence E] [--tags a,b] [--id ID] [--why W]
-  learn    --title T --rule R [--what W] [--cause C] [--trigger K] [--scope S] [--project D/P] [--tags a,b]
+  brief    [--project D/P] [--limit N] [--full] [--superseded]   session-start summary: read before working
+  prefs    [--ids] [--superseded]               the user's own preferences (core categories, active only)
+  prefer   --text T --category C [--source explicit|inferred] [--evidence E] [--scope S] [--tags a,b] [--id ID] [--why W]
+  fact     --text T --category C [--evidence E] [--tags a,b] [--id ID] [--why W]
+  learn    --title T --rule R --category C [--what W] [--cause C] [--trigger K] [--scope S] [--project D/P] [--tags a,b]
            [--id ID] [--why W]              record a pitfall; the same title again increments its count
+           prefer/fact/learn also take [--expires YYYY-MM-DD | --days N] [--force] [--direct] [--supersedes ID]:
+           * with categories.json a NEW item must name a category (id or label); otherwise it is refused
+           * a new item highly similar to a live one is NOT saved (exit 3): re-run with --id <that ID> to
+             fold it in, or --force to save it separately
+           * with policy.candidate_pool a new item starts as a candidate (shown in brief as 候选, not in prefs);
+             --direct saves it as active at once (only when the user confirmed it in so many words)
+           * --supersedes ID: the new item replaces ID; the old one is kept with status=superseded
+  from-journal --project D/P --date YYYY-MM-DD --entry N --as lesson|preference|fact --category C [--rule R] ...
+           turn a journal line ([发现]/[决定]) into a (candidate) memory item; the line is marked with its ID
+  pool     [--accept IDS | --accept-safe | --accept-all | --drop IDS --reason R] [--json]
+           candidate pool: list (with which ones are safe to accept), accept or drop (dropped = retired, kept)
+  supersede --old ID --new ID [--reason R]   old item stays on file as superseded, pointing to the new one
+  review   --id IDS [--days N]               mark items as reviewed: next review in N days (default per category)
+  migrate                                    bring items to the current format (review dates); idempotent
+  doctor   [--fix] [--mark-review] [--json] [--limit N]   health check (alias: lint); --fix does only the safe part:
+           archive expired items, merge exact duplicates, fill obvious categories and missing review dates
   temp     --text T [--days N] [--evidence E]
   focus    --item 'domain/id|note|priority' [--item ...]   replaces the focus list
   session  --summary S [--project D/P ...] [--open X ...] [--days N]
   edit     --id ID --set key=value [--set ...] [--why W]   fix fields without counting a new occurrence
   merge    --from ID --into ID [--why W]    fold a duplicate into another item (counts add up)
   retire   --id ID --reason R                rejected or superseded; git keeps the history
-  expire                                     remove expired short-term items (each removal is logged)
-  search   QUERY
+  expire                                     archive expired items (short-term files move to archive/; long-term
+                                             items with expires_at get status=archived); each one is logged
+  search   QUERY [--archived]
   render | validate
   sync     -m MESSAGE [--token-file F]       commit + push + verify (PUSHED_VERIFIED)
 
@@ -68,19 +88,28 @@ SCOPE_RE = re.compile(r'^(global|domain:[a-z0-9][a-z0-9-]{0,63}|project:[a-z0-9]
 ID_RE = re.compile(r'^(pref|fact|lesson|session|temp|chg)-\d{8}T\d{6}Z-[0-9a-f]{6}$')
 MAX_FIELD = 4000
 DERIVED = ('MEMORY.md', 'CHANGELOG.md')
-SYNC_PATHS = ('items', 'short-term', 'changes', 'MEMORY.md', 'CHANGELOG.md', 'README.md', 'LOCATION.json', '.gitignore',
-              'categories.json')
+SYNC_PATHS = ('items', 'short-term', 'changes', 'archive', 'MEMORY.md', 'CHANGELOG.md', 'README.md', 'LOCATION.json',
+              '.gitignore', 'categories.json')
 CATEGORIES_FILE = 'categories.json'  # optional, per memory repository: the taxonomy lives with the data
 CATEGORY_RE = re.compile(r'^[a-z][a-z0-9-]{0,31}$')
 REVIEW_TAG = 'needs-review'  # contradicting or possibly stale: the user decides, do not apply blindly
 SESSION_DAYS, TEMP_DAYS = 30, 14
 MERGE_SIMILARITY, WARN_SIMILARITY, DUPLICATE_REPORT = 0.8, 0.3, 0.5
+SIMILAR_BLOCK, RULE_BLOCK = 0.5, 0.7  # a new item this close to an active one is not saved without --force
+LONG_KINDS = ('preference', 'fact', 'lesson')
+STATUSES = {'active', 'candidate', 'superseded', 'retired', 'archived'}
+LIVE = ('active', 'candidate')  # what the assistant follows; candidates wait in the pool for the weekly check
+DEFAULT_REVIEW_DAYS = 180
+DEFAULT_LIMITS = {'prefs_chars': 2500, 'brief_head_chars': 6000}
+ARCHIVE_DIR = 'archive'
+REASON_RE = re.compile(r'^(conflict|stale|similar|old|legacy|category|contradiction)[-:]|^old-bridge$')
 EDITABLE = {
-    'preference': {'text', 'source', 'scope', 'evidence', 'tags', 'priority', 'category'},
-    'fact': {'text', 'evidence', 'tags', 'category'},
-    'lesson': {'title', 'rule', 'what_happened', 'cause', 'trigger', 'scope', 'tags', 'source_projects', 'category'},
-    'temporary': {'text', 'evidence'},
-    'session': {'summary', 'open_items', 'projects'},
+    'preference': {'text', 'source', 'scope', 'evidence', 'tags', 'priority', 'category', 'expires_at', 'review_by'},
+    'fact': {'text', 'evidence', 'tags', 'category', 'expires_at', 'review_by'},
+    'lesson': {'title', 'rule', 'what_happened', 'cause', 'trigger', 'scope', 'tags', 'source_projects', 'category',
+               'expires_at', 'review_by'},
+    'temporary': {'text', 'evidence', 'expires_at'},
+    'session': {'summary', 'open_items', 'projects', 'expires_at'},
 }
 LIST_FIELDS = {'tags', 'source_projects', 'open_items', 'projects'}
 
@@ -130,8 +159,15 @@ def validate_item(item, kind):
     for key, value in item.items():
         if isinstance(value, str) and len(value) > MAX_FIELD:
             raise MemError(f'{item["id"]}: {key} longer than {MAX_FIELD} characters (summarize it)')
-    if kind in ('preference', 'fact', 'lesson') and item.get('status', 'active') not in {'active', 'retired'}:
+    if kind in LONG_KINDS and item.get('status', 'active') not in STATUSES:
         raise MemError(f'{item["id"]}: invalid status')
+    if item.get('status') == 'superseded' and not ID_RE.fullmatch(str(item.get('superseded_by', ''))):
+        raise MemError(f'{item["id"]}: a superseded item must name superseded_by')
+    if item.get('review_by'):
+        try:
+            datetime.date.fromisoformat(str(item['review_by']))
+        except ValueError:
+            raise MemError(f'{item["id"]}: review_by must be YYYY-MM-DD')
     if 'scope' in item and not SCOPE_RE.fullmatch(str(item['scope'])):
         raise MemError(f'{item["id"]}: scope must be global, domain:<slug> or project:<domain>/<id>')
     if 'category' in item and not CATEGORY_RE.fullmatch(str(item['category'])):
@@ -150,7 +186,7 @@ def validate_item(item, kind):
     for key in ('tags', 'source_projects', 'projects', 'open_items'):
         if key in item and not (isinstance(item[key], list) and all(isinstance(x, str) for x in item[key])):
             raise MemError(f'{item["id"]}: {key} must be a list of strings')
-    for key in ('created_at', 'updated_at', 'expires_at', 'last_seen'):
+    for key in ('created_at', 'updated_at', 'expires_at', 'last_seen', 'reviewed_at', 'superseded_at', 'accepted_at'):
         if item.get(key):
             parse_dt(item[key])
     try:
@@ -190,7 +226,105 @@ def check_category(root, item):
         if not known:
             raise MemError(f'category {cat!r} given but {CATEGORIES_FILE} does not exist')
         if cat not in known:
-            raise MemError(f'unknown category {cat!r}; known: {known}')
+            raise MemError(f'unknown category {cat!r}; ' + category_help(load_categories(root)))
+
+
+def category_help(cats):
+    return '可选类别（--category 填 id 或名称）：' + '；'.join(f"{c['id']} = {c['label']}" for c in cats)
+
+
+def _label_key(text):
+    return re.sub(r'[\s/／]+', '', re.sub(r'（.*?）|\(.*?\)', '', str(text))).lower()
+
+
+def resolve_category(root, value):
+    """Category id from an id or a label ('长期规矩', '环境与工具链'); unknown -> MemError listing the choices."""
+    value = str(value or '').strip()
+    if not value:
+        return ''
+    cats = load_categories(root)
+    if not cats:
+        raise MemError(f'category {value!r} given but {CATEGORIES_FILE} does not exist')
+    for c in cats:
+        if value == c['id'] or _label_key(value) in (_label_key(c['label']), c['id']):
+            return c['id']
+    raise MemError(f'未知类别 {value!r}，已拒收。' + category_help(cats))
+
+
+def expiry(date=None, days=None):
+    """ISO expiry: --expires YYYY-MM-DD (end of that day, AGENT_TZ or UTC) or --days N from now."""
+    if date and days:
+        raise MemError('give --expires or --days, not both')
+    if days is not None:
+        if int(days) < 1:
+            raise MemError('--days must be at least 1')
+        return (now_dt() + datetime.timedelta(days=int(days))).isoformat()
+    if not date:
+        return None
+    try:
+        d = datetime.date.fromisoformat(str(date))
+    except ValueError:
+        raise MemError(f'bad date {date!r}, want YYYY-MM-DD')
+    return datetime.datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=_tz()).isoformat()
+
+
+def _tz():
+    if os.environ.get('AGENT_TZ'):
+        try:
+            from zoneinfo import ZoneInfo
+            return ZoneInfo(os.environ['AGENT_TZ'])
+        except Exception:  # noqa: BLE001
+            pass
+    return datetime.timezone.utc
+
+
+def today():
+    return now_dt().astimezone(_tz()).date()
+
+
+def load_policy(root):
+    """Optional "policy" block in categories.json (private, next to the data):
+         {"candidate_pool": true, "review_days": 180, "limits": {"prefs_chars": 2500, "brief_head_chars": 6000}}
+    A category may set "review_days" (0 = never ask for a review); legacy categories default to 0."""
+    f = Path(root) / CATEGORIES_FILE
+    data = json.loads(f.read_text(encoding='utf-8')) if f.exists() else {}
+    pol = data.get('policy') if isinstance(data, dict) and isinstance(data.get('policy'), dict) else {}
+    limits = dict(DEFAULT_LIMITS)
+    for k, v in (pol.get('limits') or {}).items():
+        if k not in limits or not isinstance(v, int) or v < 200:
+            raise MemError(f'{CATEGORIES_FILE}: policy.limits.{k} must be one of {sorted(limits)} and an integer >= 200')
+        limits[k] = v
+    days = pol.get('review_days', DEFAULT_REVIEW_DAYS)
+    if not isinstance(days, int) or days < 0:
+        raise MemError(f'{CATEGORIES_FILE}: policy.review_days must be a non-negative integer')
+    return {'candidate_pool': bool(pol.get('candidate_pool')), 'review_days': days, 'limits': limits}
+
+
+def review_days(item, cats, policy):
+    """Days between reviews for an item: 0 when it expires on its own or its category never needs one."""
+    if item.get('expires_at') or item.get('type') not in LONG_KINDS:
+        return 0
+    c = next((c for c in cats if c['id'] == item.get('category')), None)
+    if c and 'review_days' in c:
+        return max(0, int(c['review_days']))
+    if c and c.get('legacy'):
+        return 0
+    return policy['review_days']
+
+
+def set_review(item, days, base=None):
+    """reviewed_at = base (default now); review_by = that date + days. days 0 removes the review date."""
+    if days <= 0:
+        item.pop('review_by', None)
+        return item
+    base = parse_dt(base) if base else now_dt()
+    item['reviewed_at'] = base.isoformat()
+    item['review_by'] = (base.astimezone(_tz()).date() + datetime.timedelta(days=int(days))).isoformat()
+    return item
+
+
+def is_live(item):
+    return item.get('status', 'active') in LIVE
 
 
 def _group(items, cats):
@@ -205,6 +339,16 @@ def _group(items, cats):
 
 def _review(item):
     return '（待用户确认）' if REVIEW_TAG in item.get('tags', []) else ''
+
+
+def _cand(item):
+    return ' · 候选' if item.get('status') == 'candidate' else ''
+
+
+def _brief_head_len(text):
+    """The part of the brief read every time before the lessons: preferences, temporary agreements, focus."""
+    i = text.find('\n## 需要避开的坑')
+    return len(text if i < 0 else text[:i])
 
 
 def load_items(root, kind):
@@ -268,21 +412,35 @@ def _merge_list(old, new):
     return list(dict.fromkeys(list(old or []) + list(new or [])))
 
 
-def upsert(root, kind, fields, iid=None, why=''):
-    """Create an item, or update it when --id is given or an active item has the same title/text."""
+def upsert(root, kind, fields, iid=None, why='', force=False, direct=False, supersedes=None):
+    """Create an item, or update it when --id is given or a live item has the same title/text.
+    With a taxonomy, a new preference/fact/lesson must carry a category. A new item highly similar to a live one
+    is not saved (action 'similar_found') unless force=True. With policy.candidate_pool a new long-term item starts
+    as a candidate (direct=True: active at once). supersedes=ID: the new item replaces that one."""
     root = Path(root)
     ensure_layout(root)
     fields = {k: v for k, v in fields.items() if v not in (None, '', [])}
+    if fields.get('category'):
+        fields['category'] = resolve_category(root, fields['category'])
+    target = None
     if iid:
         found_kind, _, target = find_item(root, iid)
         if found_kind != kind:
             raise MemError(f'{iid} is a {found_kind}, not a {kind}')
+        if kind in LONG_KINDS and not is_live(target):
+            raise MemError(f'{iid} is {target.get("status")}; fold into a live item instead')
+    if supersedes:
+        old_kind, _, old = find_item(root, supersedes)
+        if not is_live(old):
+            raise MemError(f'{supersedes} is {old.get("status")}, nothing to supersede')
+        if iid:
+            raise MemError('--supersedes makes a new item; do not combine it with --id')
     similar, merged_by_similarity = [], None
-    if not iid:
+    if not iid and not supersedes:
         key = norm(fields.get('title') or fields.get('text') or '')
-        candidates = [x for x in load_items(root, kind) if x.get('status', 'active') == 'active'] if key else []
+        candidates = [x for x in load_items(root, kind) if is_live(x)] if key else []
         target = next((x for x in candidates if norm(_head(x)) == key), None)
-        if target is None and key and kind in ('preference', 'fact', 'lesson'):
+        if target is None and key and kind in LONG_KINDS:
             new_head = fields.get('title') or fields.get('text')
             scored = sorted(((similarity(_head(x), new_head), x) for x in candidates), key=lambda t: -t[0])
             if scored and scored[0][0] >= MERGE_SIMILARITY:  # same wording: count it as the same item
@@ -292,6 +450,29 @@ def upsert(root, kind, fields, iid=None, why=''):
                                for sc, x in scored), key=lambda t: -t[0])
                 similar = [{'id': x['id'], 'similarity': round(sc, 2), 'text': _head(x)[:80]}
                            for sc, x in hint if sc >= WARN_SIMILARITY][:3]
+    cats = load_categories(root) if kind in LONG_KINDS else []
+    policy = load_policy(root)
+    if not target and cats and not fields.get('category'):
+        raise MemError(f'新条目缺类别，已拒收（没有保存）。' + category_help(cats))
+    if not target and kind in LONG_KINDS and not force and not supersedes:
+        new_head, new_rule = fields.get('title') or fields.get('text') or '', fields.get('rule', '')
+        close = []
+        for x in (c for c in load_items(root, kind) if is_live(c)):
+            sc = similarity(_head(x), new_head)
+            rs = similarity(x.get('rule', ''), new_rule) if new_rule and x.get('rule') else 0.0
+            if sc >= SIMILAR_BLOCK or rs >= RULE_BLOCK:
+                close.append({'id': x['id'], 'short': _sid(x), 'similarity': round(max(sc, rs), 2), 'text': _head(x)[:80]})
+        if close:
+            close.sort(key=lambda d: -d['similarity'])
+            best = close[0]
+            return {'action': 'similar_found', 'saved': False, 'type': kind, 'similar': close[:3],
+                    'hint': (f"和已有的 {best['short']}（相似度 {best['similarity']}）「{best['text']}」很像，没有另存。"
+                             f"要并入那条：同样的命令加 --id {best['short']}（教训会计数 +1）；"
+                             f"新说法取代旧的：加 --supersedes {best['short']}；确定是另一件事：加 --force 另存。")}
+    if not target and cats and kind in LONG_KINDS and not fields.get('expires_at'):
+        days = next((c.get('expire_days') for c in cats if c['id'] == fields.get('category')), None)
+        if days:
+            fields['expires_at'] = (now_dt() + datetime.timedelta(days=int(days))).isoformat()
     ts = now_dt().isoformat()
     if target:
         action, item = 'update', dict(target)
@@ -303,28 +484,87 @@ def upsert(root, kind, fields, iid=None, why=''):
         if kind == 'preference' and item.get('source') == 'inferred':
             item['observations'] = int(target.get('observations', 1)) + 1
         item['updated_at'] = ts
+        if kind in LONG_KINDS and item.get('review_by'):  # it came up again: still current
+            set_review(item, review_days(item, cats, policy))
     else:
         action = 'add'
         item = {'id': new_id(PREFIX[kind]), 'type': kind, 'created_at': ts, 'updated_at': ts, **fields}
-        if kind in ('preference', 'fact', 'lesson'):
-            item['status'] = 'active'
+        if kind in LONG_KINDS:
+            item['status'] = 'candidate' if policy['candidate_pool'] and not direct else 'active'
+            set_review(item, review_days(item, cats, policy))
         if kind == 'lesson':
             item['count'], item['last_seen'] = 1, ts
         if kind == 'preference':
             item.setdefault('priority', 2)
             if item.get('source') == 'inferred':
                 item['observations'] = 1
+        if supersedes:
+            item['supersedes'] = [old['id']]
     validate_item(item, kind)
     check_category(root, item)
+    if supersedes and old_kind != kind:
+        raise MemError(f'{supersedes} is a {old_kind}; a {kind} cannot supersede it')
     handoff.atomic(root / KINDS[kind] / f"{item['id']}.json", dump(item))
     log_change(root, action, item['id'], kind, item.get('title') or item.get('text') or item.get('summary'), why)
-    render(root)
     result = {'action': action, 'id': item['id'], 'type': kind, **({'count': item['count']} if kind == 'lesson' else {})}
+    if kind in LONG_KINDS:
+        result['status'] = item['status']
+    if supersedes:
+        _mark_superseded(root, old['id'], item['id'], why or 'superseded')
+        result['superseded'] = old['id']
+    render(root)
     if merged_by_similarity:
         result['merged_by_similarity'] = merged_by_similarity
     if similar:
         result['similar'] = similar  # same pitfall? fold it in with: memory.py merge --from NEW --into OLD
+    if item.get('status') == 'candidate' and action == 'add':
+        result['pool'] = '已进候选池：本次起照做，每周体检时升为正式条目（memory.py pool）'
     return result
+
+
+def _mark_superseded(root, old_id, new_id_, reason):
+    kind, f, old = find_item(root, old_id)
+    ts = now_dt().isoformat()
+    old = dict(old, status='superseded', superseded_by=new_id_, superseded_at=ts, updated_at=ts,
+               superseded_reason=str(reason)[:500])
+    validate_item(old, kind)
+    handoff.atomic(f, dump(old))
+    log_change(root, 'supersede', old['id'], kind, f"{_head(old)[:80]} → {new_id_}", reason)
+
+
+def supersede(root, old_id, new_id_, reason=''):
+    """Contradiction resolved: the old item is kept (status=superseded, superseded_by=new) and drops out of brief/prefs."""
+    ko, _, old = find_item(root, old_id)
+    kn, fn, new = find_item(root, new_id_)
+    if old['id'] == new['id'] or ko != kn or ko not in LONG_KINDS:
+        raise MemError('supersede needs two different preferences, facts or lessons of the same kind')
+    if not is_live(old):
+        raise MemError(f'{old_id} is {old.get("status")}, nothing to supersede')
+    if not is_live(new):
+        raise MemError(f'{new_id_} is {new.get("status")}; the replacement must be live')
+    new = dict(new, supersedes=_merge_list(new.get('supersedes'), [old['id']]), updated_at=now_dt().isoformat())
+    validate_item(new, kn)
+    handoff.atomic(fn, dump(new))
+    _mark_superseded(root, old['id'], new['id'], reason or 'superseded')
+    render(root)
+    return {'action': 'supersede', 'old': old['id'], 'new': new['id']}
+
+
+def review(root, ids, days=None, why=''):
+    """The user (or the weekly check) confirmed these items are still right: push review_by forward."""
+    cats, policy, done = load_categories(root), load_policy(root), []
+    for iid in ids:
+        kind, f, item = find_item(root, iid)
+        if kind not in LONG_KINDS or not is_live(item):
+            raise MemError(f'{iid}: only live preferences, facts and lessons are reviewed')
+        n = int(days) if days is not None else review_days(item, cats, policy)
+        item = set_review(dict(item), n)
+        validate_item(item, kind)
+        handoff.atomic(f, dump(item))
+        log_change(root, 'review', item['id'], kind, f"{_head(item)[:80]} → {item.get('review_by', '不再复核')}", why)
+        done.append({'id': item['id'], 'review_by': item.get('review_by', '')})
+    render(root)
+    return {'action': 'review', 'items': done}
 
 
 def edit(root, iid, updates, why=''):
@@ -340,6 +580,18 @@ def edit(root, iid, updates, why=''):
             value = [x.strip() for x in value.split(',') if x.strip()]
         if key == 'priority':
             value = int(value)
+        if key == 'category' and value:
+            value = resolve_category(root, value)
+        if key == 'review_by' and value in ('', None):
+            new.pop(key, None)
+            continue
+        if key == 'expires_at':
+            if value in ('', None):
+                if kind in ('session', 'temporary'):
+                    raise MemError('short-term items always have an expiry')
+                new.pop(key, None)
+                continue
+            value = expiry(date=value) if re.fullmatch(r'\d{4}-\d{2}-\d{2}', str(value)) else parse_dt(value).isoformat()
         new[key] = value
     new['updated_at'] = now_dt().isoformat()
     validate_item(new, kind)
@@ -357,8 +609,8 @@ def merge(root, from_id, into_id, why=''):
         raise MemError('merge needs two different items of the same kind')
     if kind_a not in ('preference', 'fact', 'lesson'):
         raise MemError('only preferences, facts and lessons can be merged')
-    if a.get('status') == 'retired' or b.get('status') == 'retired':
-        raise MemError('cannot merge retired items')
+    if not is_live(a) or not is_live(b):
+        raise MemError('cannot merge retired, superseded or archived items')
     b = dict(b)
     for key in ('tags', 'source_projects'):
         if a.get(key) or b.get(key):
@@ -427,24 +679,60 @@ def load_focus(root):
     return json.loads(f.read_text(encoding='utf-8')) if f.exists() else {'items': []}
 
 
-def expire(root):
-    removed = []
+def expired_items(root):
+    """[(kind, item)] that are past expires_at and not yet archived."""
+    out = []
     for kind in ('session', 'temporary'):
-        for item in load_items(root, kind):
-            if parse_dt(item['expires_at']) <= now_dt():
-                (Path(root) / KINDS[kind] / f"{item['id']}.json").unlink()
-                log_change(root, 'expire', item['id'], kind, item.get('text') or item.get('summary'), 'expired')
-                removed.append(item['id'])
-    if removed:
+        out += [(kind, x) for x in load_items(root, kind) if parse_dt(x['expires_at']) <= now_dt()]
+    for kind in LONG_KINDS:
+        out += [(kind, x) for x in load_items(root, kind)
+                if is_live(x) and x.get('expires_at') and parse_dt(x['expires_at']) <= now_dt()]
+    return out
+
+
+def expire(root):
+    """Archive, never delete: short-term files move to archive/short-term/...; long-term items get status=archived."""
+    root = Path(root)
+    done = []
+    for kind, item in expired_items(root):
+        ts = now_dt().isoformat()
+        src = root / KINDS[kind] / f"{item['id']}.json"
+        if kind in ('session', 'temporary'):
+            handoff.atomic(root / ARCHIVE_DIR / KINDS[kind] / src.name, dump(dict(item, archived_at=ts)))
+            src.unlink()
+        else:
+            item = dict(item, status='archived', archived_at=ts, updated_at=ts,
+                        archived_reason=f"expired {item['expires_at'][:10]}")
+            validate_item(item, kind)
+            handoff.atomic(src, dump(item))
+        log_change(root, 'archive', item['id'], kind, _head(item), f"expired {item['expires_at'][:10]}")
+        done.append(item['id'])
+    if done:
         render(root)
-    return {'expired': removed}
+    return {'expired': done, 'archived': done}
 
 
-def active(root, kind):
+def load_archive(root):
+    out = []
+    for kind in ('session', 'temporary'):
+        folder = Path(root) / ARCHIVE_DIR / KINDS[kind]
+        out += [json.loads(f.read_text(encoding='utf-8')) for f in sorted(folder.glob('*.json'))] if folder.exists() else []
+    for kind in LONG_KINDS:
+        out += [x for x in load_items(root, kind) if x.get('status') == 'archived']
+    return out
+
+
+def active(root, kind, statuses=('active',)):
+    """Formal items (statuses=LIVE adds candidates); expired ones count as gone even before expire runs."""
     items = load_items(root, kind)
     if kind in ('session', 'temporary'):
         return [x for x in items if parse_dt(x['expires_at']) > now_dt()]
-    return [x for x in items if x.get('status', 'active') == 'active']
+    return [x for x in items if x.get('status', 'active') in statuses
+            and not (x.get('expires_at') and parse_dt(x['expires_at']) <= now_dt())]
+
+
+def live(root, kind):
+    return active(root, kind, LIVE)
 
 
 def _relevance(item, project):
@@ -456,18 +744,21 @@ def _relevance(item, project):
     return 1 if scope == 'global' else 0
 
 
-def search(root, query, n=20):
+def search(root, query, n=20, archived=False):
     terms = [t.lower() for t in query.split() if t.strip()]
     if not terms:
         raise MemError('Empty query')
     out = []
-    for kind in KINDS:
-        for item in active(root, kind):
+    pools = [(kind, live(root, kind)) for kind in KINDS]
+    if archived:
+        pools.append(('archived', load_archive(root)))
+    for kind, pool in pools:
+        for item in pool:
             text = json.dumps({k: v for k, v in item.items() if k not in ('id', 'created_at', 'updated_at')},
                               ensure_ascii=False).lower()
             if all(t in text for t in terms):
                 head = (item.get('title') or item.get('text') or item.get('summary') or '').lower()
-                out.append({'id': item['id'], 'type': kind, 'score': sum(3 if t in head else 1 for t in terms),
+                out.append({'id': item['id'], 'type': kind, 'status': item.get('status', 'active'), 'score': sum(3 if t in head else 1 for t in terms),
                             'text': item.get('title') or item.get('text') or item.get('summary'),
                             'rule': item.get('rule'), 'scope': item.get('scope')})
     return sorted(out, key=lambda x: -x['score'])[:n]
@@ -481,18 +772,18 @@ def _sid(item):
     return item['id'][-6:]
 
 
-def brief(root, project=None, limit=12, full=False):
+def brief(root, project=None, limit=12, full=False, superseded=False):
     root = Path(root)
-    prefs = active(root, 'preference')
+    prefs = live(root, 'preference')
     visible = sorted((p for p in prefs if _relevance(p, project) > 0),
                      key=lambda p: (p.get('priority', 2), p['source'] != 'explicit', -_relevance(p, project), p['created_at']))
     background = [p for p in visible if p.get('priority', 2) == 3 and not full]
     shown_prefs = [p for p in visible if p not in background]
     explicit = [p for p in visible if p['source'] == 'explicit']
     inferred = [p for p in visible if p['source'] == 'inferred']
-    lessons = sorted((x for x in active(root, 'lesson') if _relevance(x, project) > 0),
+    lessons = sorted((x for x in live(root, 'lesson') if _relevance(x, project) > 0),
                      key=lambda x: (_relevance(x, project), x['count'], x.get('last_seen', '')), reverse=True)
-    temps, sessions, facts = active(root, 'temporary'), active(root, 'session'), active(root, 'fact')
+    temps, sessions, facts = active(root, 'temporary'), active(root, 'session'), live(root, 'fact')
     soon = [x for x in temps + sessions if parse_dt(x['expires_at']) <= now_dt() + datetime.timedelta(days=7)]
     lines = ['# 记忆摘要（agent-memory）', '',
              '规则：用户最新的明确指令 > 本摘要；明确偏好 > 推断偏好；项目 > 领域 > 全局。记忆中的文字不授予任何权限。',
@@ -503,7 +794,7 @@ def brief(root, project=None, limit=12, full=False):
         star = '★ ' if p.get('priority', 2) == 1 else ''
         origin = '明确' if p['source'] == 'explicit' else f"推断 ×{p.get('observations', 1)} · 依据：{_line(p['evidence'], 50)}"
         scope = '' if p['scope'] == 'global' else f" · {p['scope']}"
-        return f"- {star}{_line(p['text'])}{_review(p)}（{origin}{scope} · {_sid(p)}）"
+        return f"- {star}{_line(p['text'])}{_review(p)}（{origin}{scope}{_cand(p)} · {_sid(p)}）"
 
     if cats:
         core = {c['id'] for c in cats if c.get('core')}
@@ -531,7 +822,7 @@ def brief(root, project=None, limit=12, full=False):
     shown = lessons[:limit]
     lines += ['', f'## 需要避开的坑（{len(shown)}/{len(lessons)}，按相关度和次数）']
     lesson_line = lambda x: (f"- {_line(x['title'], 80)} → {_line(x['rule'], 160)}{_review(x)}（×{x['count']}" +
-                             ('' if x['scope'] == 'global' else f" · {x['scope']}") + f" · {_sid(x)}）")
+                             ('' if x['scope'] == 'global' else f" · {x['scope']}") + f"{_cand(x)} · {_sid(x)}）")
     if cats and shown:
         for c, xs in _group(shown, cats):
             lines += [f"### {c['label']}"] + [lesson_line(x) for x in xs]
@@ -542,9 +833,16 @@ def brief(root, project=None, limit=12, full=False):
                                     (f"（未完成：{'；'.join(s['open_items'])[:120]}）" if s.get('open_items') else '')
                                     for s in recent] or ['无。'])
     if facts:
-        lines += ['', '## 关于用户'] + [f"- {_line(f['text'])}（{_sid(f)}）" for f in facts]
+        lines += ['', '## 关于用户'] + [f"- {_line(f['text'])}（{_sid(f)}{_cand(f)}）" for f in facts]
     lines += ['', '## 维护']
-    review = [x for k in ('preference', 'fact', 'lesson') for x in active(root, k) if REVIEW_TAG in x.get('tags', [])]
+    review = [x for k in ('preference', 'fact', 'lesson') for x in live(root, k) if REVIEW_TAG in x.get('tags', [])]
+    pool = [x for k in LONG_KINDS for x in live(root, k) if x.get('status') == 'candidate']
+    if pool:
+        lines.append(f'- 候选池 {len(pool)} 条（上面标「候选」）：照做，每周体检时用 memory.py pool 升为正式或丢弃。')
+    head = _brief_head_len('\n'.join(lines))
+    cap = load_policy(root)['limits']['brief_head_chars']
+    if head > cap:
+        lines.append(f'- 摘要头部 {head} 字，超过上限 {cap}：体检（memory.py doctor）会列出该挪走的条目。')
     if review:
         lines.append(f'- {len(review)} 条标了「待用户确认」（互相矛盾或可能过时）：先按用户最新的话办，'
                      f'不要据此行动；用户定了再 edit / merge / retire 并去掉 {REVIEW_TAG} 标签。')
@@ -552,14 +850,19 @@ def brief(root, project=None, limit=12, full=False):
         lines.append('- 新条目带 --category（类别见 categories.json）；没分类的 validate 会列出来。')
     if soon:
         lines.append(f'- {len(soon)} 条短期记忆 7 天内过期：有长期价值的先用 prefer / fact / learn 记下。')
-    lines += ['- 踩坑（被纠正、失败、返工、同一件事被交代第二遍、差点出错）时当场 learn（同一个坑再次发生会自动计数）；偏好变化用 prefer（推断的标 inferred）；只是改正文字用 edit；重复条目用 merge；过时用 retire。条目可用括号里的 6 位短 ID 指代。',
+    lines += ['- 踩坑（被纠正、失败、返工、同一件事被交代第二遍、差点出错）时当场 learn（同一个坑再次发生会自动计数）；偏好变化用 prefer（推断的标 inferred）；只是改正文字用 edit；重复条目用 merge；新说法推翻旧说法用 --supersedes 旧ID；过时用 retire。条目可用括号里的 6 位短 ID 指代。',
               '- 改完在回复末尾用一行告诉用户改了什么（不征求同意），然后 sync。']
+    if superseded:
+        old = [x for k in LONG_KINDS for x in load_items(root, k) if x.get('status') == 'superseded']
+        lines += ['', f'## 已取代（{len(old)} 条，只供追溯，不要照做）'] + \
+                 [f"- {_line(_head(x), 100)}（{_sid(x)} → {x['superseded_by'][-6:]}）" for x in old]
     return '\n'.join(lines) + '\n'
 
 
-def prefs(root, ids=False):
+def prefs(root, ids=False, superseded=False):
     """The user's own preferences, clean: core categories (or, without a taxonomy, global explicit ones), every priority.
-    Meant to be copied into another assistant's preference memory."""
+    Meant to be copied into another assistant's preference memory: formal (active) items only, no candidates and no
+    superseded ones (superseded=True lists those at the end, for tracing)."""
     root = Path(root)
     cats = load_categories(root)
     live = sorted(active(root, 'preference'), key=lambda p: (p.get('priority', 2), p['created_at']))
@@ -578,6 +881,10 @@ def prefs(root, ids=False):
             lines.append(f"- {_line(p['text'], 600)}{_review(p)}" + (f"（{' · '.join(tail)}）" if tail else ''))
     if not any(xs for _, xs in groups):
         lines += ['', '无。']
+    if superseded:
+        old = [p for p in load_items(root, 'preference') if p.get('status') == 'superseded']
+        lines += ['', f'## 已取代（{len(old)} 条，只供追溯，不要存）'] + \
+                 [f"- {_line(p['text'], 300)}（{_sid(p)} → {p['superseded_by'][-6:]}）" for p in old]
     return '\n'.join(lines) + '\n'
 
 
@@ -589,7 +896,7 @@ def render(root):
     if cats:
         lines += ['## 类别', '']
         for c in cats:
-            n = {k: sum(1 for x in load_items(root, k) if x.get('status', 'active') == 'active' and x.get('category') == c['id'])
+            n = {k: sum(1 for x in load_items(root, k) if is_live(x) and x.get('category') == c['id'])
                  for k in ('preference', 'fact', 'lesson')}
             lines.append(f"- **{c['label']}**（`{c['id']}`）：偏好 {n['preference']} · 事实 {n['fact']} · 教训 {n['lesson']}" +
                          (f" — {c['desc']}" if c.get('desc') else ''))
@@ -597,23 +904,29 @@ def render(root):
 
     def entry(kind, x):
         if kind == 'lesson':
-            return f"- **{x['title']}** → {x['rule']}{_review(x)}（×{x['count']} · {x['scope']} · `{x['id']}`）"
+            return f"- **{x['title']}** → {x['rule']}{_review(x)}（×{x['count']} · {x['scope']}{_cand(x)} · `{x['id']}`）"
         if kind == 'preference':
-            return f"- {x['text']}{_review(x)}（{'明确' if x['source'] == 'explicit' else '推断'} · {x['scope']} · `{x['id']}`）"
+            return f"- {x['text']}{_review(x)}（{'明确' if x['source'] == 'explicit' else '推断'} · {x['scope']}{_cand(x)} · `{x['id']}`）"
         if kind in ('temporary', 'session'):
             return f"- {x.get('text') or x.get('summary')}（至 {x['expires_at'][:10]} · `{x['id']}`）"
-        return f"- {x['text']}{_review(x)}（`{x['id']}`）"
+        return f"- {x['text']}{_review(x)}（{_cand(x).lstrip(' ·')}{' · ' if _cand(x) else ''}`{x['id']}`）"
 
     for kind in ('preference', 'lesson', 'fact', 'temporary', 'session'):
         items = load_items(root, kind)
-        live = [x for x in items if x.get('status', 'active') == 'active']
-        retired = len(items) - len(live)
-        lines += [f'## {labels[kind]}（{len(live)}' + (f'，已停用 {retired}' if retired else '') + '）', '']
+        cur = [x for x in items if is_live(x)]
+        st = {}
+        for x in items:
+            if not is_live(x):
+                st[x['status']] = st.get(x['status'], 0) + 1
+        pool = sum(1 for x in cur if x.get('status') == 'candidate')
+        extra = ([f'候选 {pool}'] if pool else []) + [f"{ {'superseded': '已取代', 'retired': '已停用', 'archived': '已归档'}[k]} {v}"
+                                                      for k, v in sorted(st.items())]
+        lines += [f'## {labels[kind]}（{len(cur)}' + (f"，{'，'.join(extra)}" if extra else '') + '）', '']
         if cats and kind in ('preference', 'lesson', 'fact'):
-            for c, xs in _group(live, cats):
+            for c, xs in _group(cur, cats):
                 lines += [f"### {c['label']}（{len(xs)}）", ''] + [entry(kind, x) for x in xs] + ['']
         else:
-            lines += [entry(kind, x) for x in live] + ['']
+            lines += [entry(kind, x) for x in cur] + ['']
     focus = load_focus(root).get('items', [])
     lines += ['## 近期重点', ''] + [f"{i}. {f['project'] or '-'} — {f['note']}" for i, f in enumerate(focus, 1)] + ['']
     handoff.atomic(root / 'MEMORY.md', ('\n'.join(lines).rstrip() + '\n').encode())
@@ -642,7 +955,7 @@ def validate(root):
             (root / name).unlink()
         else:
             handoff.atomic(root / name, data)
-    expired = [x['id'] for k in ('session', 'temporary') for x in load_items(root, k) if parse_dt(x['expires_at']) <= now_dt()]
+    expired = [x['id'] for _, x in expired_items(root)]
     dupes = []
     for kind in ('preference', 'fact', 'lesson'):
         live = active(root, kind)
@@ -653,7 +966,7 @@ def validate(root):
                     dupes.append({'a': x['id'], 'b': y['id'], 'similarity': round(sc, 2)})
     cats = load_categories(root)
     known = {c['id'] for c in cats}
-    live = [x for k in ('preference', 'fact', 'lesson') for x in active(root, k)]
+    live = [x for k in ('preference', 'fact', 'lesson') for x in active(root, k, LIVE)]
     unknown = [x['id'] for x in live if x.get('category') and x['category'] not in known]
     if unknown:
         raise MemError(f'unknown category on {unknown[:5]} (add it to {CATEGORIES_FILE} or fix the item)')
@@ -663,6 +976,487 @@ def validate(root):
         result['uncategorized'] = [x['id'] for x in live if not x.get('category')]
     result['needs_review'] = [x['id'] for x in live if REVIEW_TAG in x.get('tags', [])]
     return result
+
+
+# ---------------------------------------------------------------- doctor (lint)
+
+def load_doctor_config(root):
+    """Optional rules in categories.json (private, next to the data): {"doctor": {
+         "stale_patterns": [{"pattern": "<regex>", "label": "…"}],      text that only held in an old environment
+         "auto_category": [{"category": id, "scopes": [..], "scope_prefixes": [..], "keywords": [..]}]}}
+    and on a category: "legacy": true (stale mentions are expected there), "expire_days": N (default expiry)."""
+    f = Path(root) / CATEGORIES_FILE
+    data = json.loads(f.read_text(encoding='utf-8')) if f.exists() else {}
+    cfg = data.get('doctor') if isinstance(data, dict) else None
+    cfg = cfg if isinstance(cfg, dict) else {}
+    pats = []
+    for p in cfg.get('stale_patterns') or []:
+        try:
+            pats.append((re.compile(p['pattern'], re.I), p.get('label') or p['pattern']))
+        except (re.error, KeyError, TypeError) as e:
+            raise MemError(f'{CATEGORIES_FILE}: bad doctor.stale_patterns entry {p!r}: {e}')
+    return {'stale': pats, 'auto': [r for r in cfg.get('auto_category') or [] if isinstance(r, dict) and r.get('category')]}
+
+
+def _text_of(item):
+    return ' '.join(str(item.get(k) or '') for k in ('title', 'text', 'rule', 'what_happened', 'cause', 'summary'))
+
+
+_NUM = re.compile(r'\d+(?:\.\d+)?')
+_NEG = re.compile(r'不要|不能|不用|不再|禁止|别|勿|避免|不允许|不许|\bnever\b|\bdon\'t\b|\bdo not\b|\bno longer\b', re.I)
+
+
+def _contradiction(a, b):
+    """Heuristic: same wording with different numbers, or one negates what the other says."""
+    ta, tb = _text_of(a), _text_of(b)
+    sa, sb = _NUM.sub('#', ta), _NUM.sub('#', tb)
+    if _NUM.findall(ta) and _NUM.findall(tb) and _NUM.findall(ta) != _NUM.findall(tb) and similarity(sa, sb) >= 0.75:
+        return '同一件事数值不同'
+    if bool(_NEG.search(ta)) != bool(_NEG.search(tb)) and similarity(_NEG.sub('', ta), _NEG.sub('', tb)) >= 0.45:
+        return '一条说做、一条说不做'
+    return ''
+
+
+def _auto_category(item, rules):
+    """The one category the config rules point to, else '' (none or several = not obvious)."""
+    scope, text = item.get('scope', ''), _text_of(item).lower()
+    exact = {r['category'] for r in rules if scope and scope in (r.get('scopes') or [])}
+    prefix = set() if exact else {r['category'] for r in rules
+                                  if scope and any(scope.startswith(p) for p in r.get('scope_prefixes') or [])}
+    words = {r['category'] for r in rules if any(str(k).lower() in text for k in r.get('keywords') or [])}
+    hit = exact | prefix | words
+    return hit.pop() if len(hit) == 1 else ''
+
+
+def _brief_item(x):
+    return {'id': x['id'], 'short': _sid(x), 'type': x['type'], 'category': x.get('category', ''),
+            'text': _line(_head(x), 90)}
+
+
+def _reasons(x):
+    return [t for t in x.get('tags', []) if REASON_RE.search(t)]
+
+
+def _pairs(items):
+    """Similar pairs and contradiction candidates among live items of the same kind."""
+    by_kind = {}
+    for x in items:
+        by_kind.setdefault(x['type'], []).append((x, _bigrams(_head(x)), _bigrams(x.get('rule', ''))))
+    similar, contra = [], []
+    for xs in by_kind.values():
+        for i, (x, hx, rx) in enumerate(xs):
+            for y, hy, ry in xs[i + 1:]:
+                sh = len(hx & hy) / len(hx | hy) if hx and hy else 0.0
+                sr = len(rx & ry) / len(rx | ry) if rx and ry else 0.0
+                both_review = REVIEW_TAG in x.get('tags', []) and REVIEW_TAG in y.get('tags', [])
+                if sh >= DUPLICATE_REPORT or sr >= RULE_BLOCK:
+                    if not both_review:
+                        similar.append((x, y, round(max(sh, sr), 2)))
+                elif sh >= 0.25 or sr >= 0.35:
+                    why = '' if both_review else _contradiction(x, y)
+                    if why and x.get('category') == y.get('category'):
+                        contra.append((x, y, why, round(max(sh, sr), 2)))
+    return similar, contra
+
+
+def _identical_pairs(items):
+    """(duplicate, keep) for items with exactly the same head, rule and scope; keep = formal first, then oldest."""
+    groups = {}
+    for x in items:
+        groups.setdefault((x['type'], norm(_head(x)), norm(x.get('rule', '')), x.get('scope', '')), []).append(x)
+    pairs = []
+    for xs in groups.values():
+        xs = sorted(xs, key=lambda x: (x.get('status') != 'active', x['created_at'], x['id']))
+        if len(xs) > 1 and len({x.get('category') for x in xs if x.get('category')}) <= 1:
+            pairs += [(dup, xs[0]) for dup in xs[1:]]
+    return pairs
+
+
+def _stale_hits(item, cfg):
+    return sorted({label for rx, label in cfg['stale'] if rx.search(_text_of(item))})
+
+
+def pool_status(root, items=None, cats=None, cfg=None):
+    """Every candidate with the reasons it still needs the user's nod ([] = safe to accept by rule).
+    Safe = has a category, is not a core (user-profile/rules) preference, not an inferred preference, not tagged
+    needs-review, not highly similar to or in apparent conflict with a live item, and mentions no old environment."""
+    root = Path(root)
+    cats = load_categories(root) if cats is None else cats
+    cfg = load_doctor_config(root) if cfg is None else cfg
+    items = [x for k in LONG_KINDS for x in live(root, k)] if items is None else items
+    core = {c['id'] for c in cats if c.get('core')}
+    known = {c['id'] for c in cats}
+    similar, contra = _pairs(items)
+    near = {}
+    for x, y, sc in similar:
+        near.setdefault(x['id'], []).append(f'和 {_sid(y)} 很像（{sc}）')
+        near.setdefault(y['id'], []).append(f'和 {_sid(x)} 很像（{sc}）')
+    for x, y, why, _ in contra:
+        near.setdefault(x['id'], []).append(f'可能和 {_sid(y)} 矛盾（{why}）')
+        near.setdefault(y['id'], []).append(f'可能和 {_sid(x)} 矛盾（{why}）')
+    out = []
+    for x in (i for i in items if i.get('status') == 'candidate'):
+        why = []
+        if not x.get('category') or (known and x['category'] not in known):
+            why.append('没分类')
+        if x['type'] == 'preference' and x.get('category') in core:
+            why.append('核心类偏好（会被存进助手自己的偏好记忆），要用户点头')
+        if x['type'] == 'preference' and x.get('source') == 'inferred':
+            why.append('推断出来的偏好，要用户点头')
+        if REVIEW_TAG in x.get('tags', []):
+            why.append('标了待确认')
+        why += near.get(x['id'], [])
+        hits = _stale_hits(x, cfg)
+        if hits:
+            why.append('提到旧环境：' + '、'.join(hits))
+        out.append(dict(_brief_item(x), created_at=x['created_at'], safe=not why, why=why))
+    return out
+
+
+def pool(root, accept=None, accept_safe=False, accept_all=False, drop=None, reason='', why=''):
+    """Candidate pool: list, accept (ids = the user's nod; --accept-safe = only what the rules call safe) or drop."""
+    root = Path(root)
+    status = pool_status(root)
+    by_id = {x['id']: x for x in status}
+    done = {'accepted': [], 'dropped': []}
+
+    def resolve(ids):
+        out = []
+        for iid in ids:
+            _, _, item = find_item(root, iid)
+            if item.get('status') != 'candidate':
+                raise MemError(f'{iid} is not in the candidate pool (status {item.get("status", "active")})')
+            out.append(item['id'])
+        return out
+
+    if drop:
+        if not reason:
+            raise MemError('丢弃候选要写 --reason')
+        for iid in resolve(drop):
+            kind, f, item = find_item(root, iid)
+            ts = now_dt().isoformat()
+            item = dict(item, status='retired', retired_at=ts, updated_at=ts,
+                        retired_reason=f'candidate dropped: {reason}'[:500])
+            validate_item(item, kind)
+            handoff.atomic(f, dump(item))
+            log_change(root, 'pool-drop', iid, kind, _head(item), reason)
+            done['dropped'].append(iid)
+    ids = []
+    if accept:
+        ids = resolve(accept)
+    elif accept_all:
+        ids = [x['id'] for x in status if x['id'] not in done['dropped']]
+    elif accept_safe:
+        ids = [x['id'] for x in status if x['safe'] and x['id'] not in done['dropped']]
+    for iid in ids:
+        kind, f, item = find_item(root, iid)
+        ts = now_dt().isoformat()
+        item = dict(item, status='active', accepted_at=ts, updated_at=ts)
+        validate_item(item, kind)
+        handoff.atomic(f, dump(item))
+        how = 'rule: safe' if accept_safe and not accept else 'user approved'
+        log_change(root, 'pool-accept', iid, kind, _head(item), why or how)
+        done['accepted'].append(iid)
+    if done['accepted'] or done['dropped']:
+        render(root)
+    left = [x for x in pool_status(root)]
+    return {'action': 'pool', **done, 'candidates': left,
+            'safe': [x['short'] for x in left if x['safe']], 'needs_user': [x['short'] for x in left if not x['safe']]}
+
+
+def pool_text(rep):
+    L = []
+    if rep['accepted'] or rep['dropped']:
+        L.append(f"升为正式 {len(rep['accepted'])} 条" + (f"：{'、'.join(i[-6:] for i in rep['accepted'])}" if rep['accepted'] else '') +
+                 f"；丢弃 {len(rep['dropped'])} 条" + (f"：{'、'.join(i[-6:] for i in rep['dropped'])}" if rep['dropped'] else ''))
+    xs = rep['candidates']
+    L.append(f"候选池 {len(xs)} 条（可按规则升级 {len(rep['safe'])} · 要用户点头 {len(rep['needs_user'])}）")
+    for x in xs:
+        L.append(f"- {x['short']} [{x['category'] or '未分类'}] {x['type']}「{x['text']}」（{x['created_at'][:10]}）" +
+                 ('：可升级' if x['safe'] else '：' + '；'.join(x['why'])))
+    if xs:
+        L.append('升级：pool --accept-safe（只升安全的）或 pool --accept ID,ID（用户点了头的）；丢弃：pool --drop ID --reason …')
+    return '\n'.join(L) + '\n'
+
+
+def read_sizes(root):
+    """Length of what is read every time: prefs, and the head of the brief (global and per focus project).
+    For anything over its limit, the lines that would bring it back under, with what to do with each."""
+    root = Path(root)
+    pol, cats = load_policy(root), load_categories(root)
+    lim = pol['limits']
+    core = {c['id'] for c in cats if c.get('core')}
+    out = []
+    text = prefs(root)
+    row = {'what': 'prefs', 'chars': len(text), 'limit': lim['prefs_chars'], 'move': []}
+    if row['chars'] > lim['prefs_chars']:
+        mine = [p for p in active(root, 'preference') if not cats or p.get('category') in core]
+        excess = row['chars'] - lim['prefs_chars']
+        for p in sorted(mine, key=lambda p: (p.get('scope') == 'global', -len(p['text']))):
+            if excess <= 0:
+                break
+            hint = ('只对某个项目或领域成立：改到对应的非核心类别' if p.get('scope') != 'global' else
+                    '缩成一句，细节挪进项目文档或 skill' if len(p['text']) > 120 else
+                    '不是用户本人的习惯或规矩：改到非核心类别')
+            row['move'].append(dict(_brief_item(p), chars=len(p['text']), hint=hint))
+            excess -= len(p['text'])
+    out.append(row)
+    projects = [None] + [f['project'] for f in load_focus(root).get('items', []) if f.get('project')]
+    for proj in dict.fromkeys(projects):
+        head = _brief_head_len(brief(root, proj))
+        row = {'what': 'brief' + (f' --project {proj}' if proj else ''), 'chars': head,
+               'limit': lim['brief_head_chars'], 'move': []}
+        if head > lim['brief_head_chars']:
+            shown = [p for p in live(root, 'preference') if _relevance(p, proj) > 0 and p.get('priority', 2) != 3]
+            excess = head - lim['brief_head_chars']
+            other = sorted((p for p in shown if not cats or p.get('category') not in core), key=lambda p: -len(p['text']))
+            for p in other:
+                if excess <= 0:
+                    break
+                hint = ('缩成一句，细节挪进项目文档或 skill' if len(p['text']) > 120 else
+                        '降为背景偏好（edit --set priority=3，只在 brief --full 出现）' if p.get('scope') == 'global' or proj else
+                        '把 scope 收窄到它所属的项目（只在选了该项目时出现）')
+                row['move'].append(dict(_brief_item(p), chars=len(p['text']), hint=hint))
+                excess -= len(p['text']) + 30
+        out.append(row)
+    return out
+
+
+def doctor(root, fix=False, mark_review=False):
+    """Health check. Without flags it only reports. --fix does the safe part: archive expired items, merge items that
+    are exactly the same, fill a category the config rules make obvious, give missing review dates their default.
+    --mark-review tags what is left for the user (similar, contradiction candidates, stale mentions, unclear
+    category) with needs-review + a reason tag. Candidates are accepted with `pool`, never here."""
+    root = Path(root)
+    cats = load_categories(root)
+    cfg = load_doctor_config(root)
+    pol = load_policy(root)
+    known = {c['id'] for c in cats}
+    legacy_cats = {c['id'] for c in cats if c.get('legacy')}
+    fixed = {'archived': [], 'merged': [], 'categorized': [], 'review_dated': [], 'marked_review': []}
+
+    def current():
+        return [x for k in LONG_KINDS for x in live(root, k)]
+
+    def no_review_date(items):
+        return [x for x in items if not x.get('review_by') and review_days(x, cats, pol) > 0]
+
+    expired = [x for _, x in expired_items(root)]
+    if fix:
+        fixed['archived'] = expire(root)['archived'] if expired else []
+        for dup, keep in _identical_pairs(current()):
+            merge(root, dup['id'], keep['id'], why='doctor --fix：内容完全相同')
+            fixed['merged'].append({'from': dup['id'], 'into': keep['id']})
+        if cats and cfg['auto']:
+            for x in [x for x in current() if not x.get('category')]:
+                c = _auto_category(x, cfg['auto'])
+                if c in known:
+                    edit(root, x['id'], {'category': c}, why='doctor --fix：类别一目了然')
+                    fixed['categorized'].append({'id': x['id'], 'category': c})
+        missing = no_review_date(current())
+        if missing:
+            fixed['review_dated'] = migrate(root)['review_dated']
+        expired = [x for _, x in expired_items(root)]
+
+    items = current()
+    identical = _identical_pairs(items)
+    in_identical = {d['id'] for d, _ in identical}
+    uncategorized, auto_fill = [], []
+    for x in items:
+        if not x.get('category') or (cats and x['category'] not in known):
+            c = _auto_category(x, cfg['auto']) if cats else ''
+            (auto_fill if c in known and c else uncategorized).append(dict(_brief_item(x), suggested=c))
+    sim_raw, con_raw = _pairs([x for x in items if x['id'] not in in_identical])
+    similar = sorted(({'a': _brief_item(x), 'b': _brief_item(y), 'similarity': sc} for x, y, sc in sim_raw),
+                     key=lambda d: -d['similarity'])
+    contra = sorted(({'a': _brief_item(x), 'b': _brief_item(y), 'why': why, 'overlap': ov} for x, y, why, ov in con_raw),
+                    key=lambda d: -d['overlap'])
+    stale = []
+    for x in items:
+        if x.get('category') in legacy_cats:
+            continue
+        hits = _stale_hits(x, cfg)
+        if hits:
+            stale.append(dict(_brief_item(x), mentions=hits, already_review=REVIEW_TAG in x.get('tags', [])))
+    review_groups = {}
+    for x in items:
+        if REVIEW_TAG in x.get('tags', []):
+            for r in _reasons(x) or ['（未写原因）']:
+                review_groups.setdefault(r, []).append(_brief_item(x))
+    td = today()
+    overdue = sorted((dict(_brief_item(x), review_by=x['review_by']) for x in items
+                      if x.get('review_by') and datetime.date.fromisoformat(x['review_by']) <= td),
+                     key=lambda d: d['review_by'])
+    missing_review = [_brief_item(x) for x in no_review_date(items)]
+    every = {x['id']: x for k in LONG_KINDS for x in load_items(root, k)}
+    broken = [dict(_brief_item(x), superseded_by=x['superseded_by']) for x in every.values()
+              if x.get('status') == 'superseded' and x['superseded_by'] not in every]
+    candidates = pool_status(root, items, cats, cfg)
+    sizes = read_sizes(root)
+
+    if mark_review:
+        todo = {}
+        for d in similar:
+            todo.setdefault(d['a']['id'], set()).add('similar-' + d['b']['short'])
+            todo.setdefault(d['b']['id'], set()).add('similar-' + d['a']['short'])
+        for d in contra:
+            for side in ('a', 'b'):
+                todo.setdefault(d[side]['id'], set()).add('conflict-candidate')
+        for d in stale:
+            todo.setdefault(d['id'], set()).add('stale-mention')
+        for d in uncategorized:
+            todo.setdefault(d['id'], set()).add('category-unclear')
+        for iid, reasons in sorted(todo.items()):
+            kind, f, it = find_item(root, iid)
+            tags = list(it.get('tags', []))
+            add = [t for t in [REVIEW_TAG, *sorted(reasons)] if t not in tags]
+            if add:
+                edit(root, iid, {'tags': tags + add}, why='doctor --mark-review：等用户定')
+                fixed['marked_review'].append({'id': iid, 'tags': add})
+
+    counts = {k: len(active(root, k)) for k in LONG_KINDS}
+    counts.update(candidate=sum(1 for k in LONG_KINDS for x in load_items(root, k) if x.get('status') == 'candidate'),
+                  superseded=sum(1 for x in every.values() if x.get('status') == 'superseded'),
+                  session=len(active(root, 'session')), temporary=len(active(root, 'temporary')),
+                  archived=len(load_archive(root)))
+    pending = len({d['id'] for d in uncategorized} | {d[s]['id'] for d in similar + contra for s in ('a', 'b')} |
+                  {d['id'] for d in stale if not d['already_review']} |
+                  {x['id'] for xs in review_groups.values() for x in xs} |
+                  {d['id'] for d in overdue} | {d['id'] for d in broken} |
+                  {d['id'] for d in candidates if not d['safe']})
+    return {'generated_at': now_dt().isoformat(), 'fix': fix, 'counts': counts, 'fixed': fixed,
+            'auto': {'expired': [_brief_item(x) | {'expires_at': x['expires_at']} for x in expired],
+                     'identical': [{'from': _brief_item(d), 'into': _brief_item(k)} for d, k in identical],
+                     'category': auto_fill, 'missing_review': missing_review},
+            'pool': candidates,
+            'user': {'needs_review': review_groups, 'contradictions': contra, 'similar': similar,
+                     'stale_mentions': stale, 'uncategorized': uncategorized, 'review_overdue': overdue,
+                     'broken_supersede': broken},
+            'sizes': sizes,
+            'pending_items': pending}
+
+
+def doctor_text(rep, limit=20):
+    c, f, auto, user = rep['counts'], rep['fixed'], rep['auto'], rep['user']
+    L = [f"# 记忆体检（agent-memory）· {rep['generated_at'][:16].replace('T', ' ')} UTC", '',
+         f"正式条目：偏好 {c['preference']} · 事实 {c['fact']} · 教训 {c['lesson']}；候选池 {c['candidate']}；"
+         f"已取代 {c['superseded']}；短期：对话摘要 {c['session']} · 临时约定 {c['temporary']}；已归档 {c['archived']}"]
+
+    def more(xs):
+        return [f'- …另有 {len(xs) - limit} 条（--json 看全部）'] if len(xs) > limit else []
+
+    if rep['fix']:
+        L += ['', '## 已自动处理（--fix）',
+              f"- 到期归档 {len(f['archived'])} 条", f"- 完全相同并入 {len(f['merged'])} 条" +
+              ''.join(f"；{m['from'][-6:]} → {m['into'][-6:]}" for m in f['merged'][:limit]),
+              f"- 补类别 {len(f['categorized'])} 条" + ''.join(f"；{m['id'][-6:]} → {m['category']}" for m in f['categorized'][:limit]),
+              f"- 补复核日期 {len(f['review_dated'])} 条"]
+    left = len(auto['expired']) + len(auto['identical']) + len(auto['category']) + len(auto['missing_review'])
+    L += ['', '## 可自动处理' + ('（加 --fix 执行）' if left else '') + f'：{left} 条']
+    L += [f"- 到期：{x['short']} {x['text']}（{x['expires_at'][:10]}）" for x in auto['expired'][:limit]] + more(auto['expired'])
+    L += [f"- 完全相同：{d['from']['short']} → 并入 {d['into']['short']}「{d['into']['text']}」" for d in auto['identical'][:limit]]
+    L += [f"- 补类别：{x['short']} → {x['suggested']}「{x['text']}」" for x in auto['category'][:limit]]
+    if auto['missing_review']:
+        L.append(f"- 缺复核日期：{len(auto['missing_review'])} 条（按类别默认周期补上）")
+    if f['marked_review']:
+        L += ['', f"## 已标「待确认」（--mark-review）：{len(f['marked_review'])} 条"]
+    pool_ = rep['pool']
+    safe = [x for x in pool_ if x['safe']]
+    L += ['', f"## 候选池：{len(pool_)} 条（可按规则升级 {len(safe)} · 要用户点头 {len(pool_) - len(safe)}）"]
+    L += [f"- {x['short']} [{x['category'] or '未分类'}]「{x['text'][:60]}」" + ('：可升级' if x['safe'] else '：' + '；'.join(x['why']))
+          for x in pool_[:limit]] + more(pool_)
+    if pool_:
+        L.append('- 升级用 pool --accept-safe（只升安全的）；要点头的等用户说了再 pool --accept ID 或 pool --drop ID --reason …')
+    L += ['', '## 每次都读的部分（长度上限）']
+    for s in rep['sizes']:
+        over = s['chars'] > s['limit']
+        L.append(f"- {s['what']}：{s['chars']} / {s['limit']} 字" + ('，**超了**' if over else '，没超'))
+        L += [f"  - {m['short']} [{m['category'] or '未分类'}] {m['chars']} 字「{m['text'][:40]}」→ {m['hint']}" for m in s['move'][:10]]
+    L += ['', f"## 要用户定的：{rep['pending_items']} 条（不自动改）"]
+    rg = user['needs_review']
+    L += ['', f"### 已标待确认（{len({x['id'] for xs in rg.values() for x in xs})} 条，按原因）"]
+    for reason, xs in sorted(rg.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        L.append(f"- {reason}（{len(xs)}）：" + '；'.join(f"{x['short']} {x['text'][:40]}" for x in xs[:4]) +
+                 (f'；…另 {len(xs) - 4} 条' if len(xs) > 4 else ''))
+    L += ['', f"### 矛盾候选（新发现，{len(user['contradictions'])} 组）"]
+    L += [f"- {d['a']['short']}「{d['a']['text'][:50]}」↔ {d['b']['short']}「{d['b']['text'][:50]}」（{d['why']}）"
+          for d in user['contradictions'][:limit]] + more(user['contradictions'])
+    L += ['', f"### 高度相似但不完全相同（{len(user['similar'])} 组）"]
+    L += [f"- {d['a']['short']}「{d['a']['text'][:50]}」≈ {d['b']['short']}「{d['b']['text'][:50]}」（{d['similarity']}）"
+          for d in user['similar'][:limit]] + more(user['similar'])
+    st = [d for d in user['stale_mentions'] if not d['already_review']]
+    L += ['', f"### 提到旧环境、却不在旧环境类（{len(st)} 条未标；另 {len(user['stale_mentions']) - len(st)} 条已标待确认）"]
+    L += [f"- {d['short']} [{d['category'] or '未分类'}]「{d['text'][:60]}」提到 {'、'.join(d['mentions'])}" for d in st[:limit]] + more(st)
+    L += ['', f"### 超期没复核（{len(user['review_overdue'])} 条）"]
+    L += [f"- {d['short']} [{d['category'] or '未分类'}]「{d['text'][:60]}」（应在 {d['review_by']} 前复核）"
+          for d in user['review_overdue'][:limit]] + more(user['review_overdue'])
+    if user['broken_supersede']:
+        L += ['', f"### 「已取代」指向不存在的条目（{len(user['broken_supersede'])} 条）"]
+        L += [f"- {d['short']} → {d['superseded_by']}" for d in user['broken_supersede'][:limit]]
+    L += ['', f"### 类别拿不准（{len(user['uncategorized'])} 条）"]
+    L += [f"- {d['short']}「{d['text']}」" for d in user['uncategorized'][:limit]] + more(user['uncategorized'])
+    L += ['', '处理：用户定了「保留」就 edit 去掉 needs-review 和原因标签；「新的对、旧的作废」就 supersede --old 旧ID --new 新ID；'
+          '「停用」就 retire --id ID --reason …；同一件事就 merge --from ID --into ID；复核过仍然对就 review --id ID。']
+    return '\n'.join(L) + '\n'
+
+
+def migrate(root):
+    """Bring items to the current format: every live item whose category asks for reviews gets reviewed_at (its last
+    update) and review_by (that + the category's review days). Idempotent; one change-log entry per run."""
+    root = Path(root)
+    cats, pol, done = load_categories(root), load_policy(root), []
+    for kind in LONG_KINDS:
+        for item in load_items(root, kind):
+            if not is_live(item) or item.get('review_by'):
+                continue
+            n = review_days(item, cats, pol)
+            if n <= 0:
+                continue
+            item = set_review(dict(item), n, base=item.get('updated_at') or item['created_at'])
+            validate_item(item, kind)
+            handoff.atomic(root / KINDS[kind] / f"{item['id']}.json", dump(item))
+            done.append(item['id'])
+    if done:
+        log_change(root, 'migrate', 'schema', 'schema', f'补复核日期 {len(done)} 条（reviewed_at = 最后更新，review_by = 加上类别的复核周期）',
+                   'memory.py migrate')
+        render(root)
+    return {'action': 'migrate', 'review_dated': done, 'count': len(done)}
+
+
+
+# ---------------------------------------------------------------- journal -> memory
+
+def promote(root, progress_root, project, date, entry, as_kind, fields, force=False, why='', direct=False):
+    """Turn one journal line into a preference / fact / lesson (a candidate when the pool is on), record where it
+    came from (source_journal, source_date), mark the line with the item's ID."""
+    import journal
+    if as_kind not in LONG_KINDS:
+        raise MemError('--as must be lesson, preference or fact')
+    line = journal.get_entry(progress_root, project, date, int(entry))
+    if line['promoted']:
+        raise MemError(f"{date}#{entry} 已经存进记忆：{line['promoted']}")
+    src = f"工作记录 {project} {date} {line['time']} [{line['label']}]"
+    f = {k: v for k, v in fields.items() if v not in (None, '', [])}
+    f.setdefault('evidence', f"{src}：{line['text'][:300]}")
+    f['source_journal'], f['source_date'] = f"{project}@{date}#{entry}", date
+    if as_kind == 'lesson':
+        if not f.get('rule'):
+            raise MemError('提成教训要写 --rule（以后怎么做）')
+        f.setdefault('title', _line(line['text'], 80))
+        f.setdefault('what_happened', line['text'][:MAX_FIELD])
+        f.setdefault('trigger', 'other')
+        f.setdefault('scope', 'global')
+        f['source_projects'] = [project]
+    else:
+        f.setdefault('text', line['text'][:MAX_FIELD])
+        if as_kind == 'preference':
+            f.setdefault('source', 'inferred')
+            f.setdefault('scope', 'global')
+    res = upsert(root, as_kind, f, f.pop('id', None), why or src, force=force, direct=direct)
+    if res.get('action') in ('add', 'update'):
+        journal.mark_promoted(progress_root, project, date, int(entry), res['id'])
+        res['journal'] = f'{date}#{entry} 已标记；记得 progress_sync.py push --project {project}'
+    return res
 
 
 def sync(root, message, token=None):
@@ -682,8 +1476,10 @@ def main(argv=None):
     b.add_argument('--project')
     b.add_argument('--limit', type=int, default=12)
     b.add_argument('--full', action='store_true', help='also list background (priority 3) preferences')
+    b.add_argument('--superseded', action='store_true', help='also list superseded items at the end (tracing only)')
     pf = sub.add_parser('prefs', help="the user's own preferences only (core categories), clean, every priority")
     pf.add_argument('--ids', action='store_true', help='append short IDs')
+    pf.add_argument('--superseded', action='store_true', help='also list superseded preferences at the end')
     for name in ('prefer', 'fact'):
         c = sub.add_parser(name)
         c.add_argument('--text', required=True)
@@ -715,6 +1511,48 @@ def main(argv=None):
     l.add_argument('--category', default='')
     l.add_argument('--id')
     l.add_argument('--why', default='')
+    pr = sub.add_parser('from-journal', aliases=['promote'], help='turn a journal line ([发现]/[决定]) into a memory item')
+    pr.add_argument('--project', required=True)
+    pr.add_argument('--date', required=True)
+    pr.add_argument('--entry', type=int, required=True, help='line number from journal.py candidates')
+    pr.add_argument('--as', dest='as_kind', required=True, choices=LONG_KINDS)
+    pr.add_argument('--progress-root', type=Path, default=handoff.DEFAULT_ROOT)
+    for opt in ('--title', '--rule', '--text', '--cause', '--evidence', '--scope', '--tags', '--category', '--why', '--id'):
+        pr.add_argument(opt, default='')
+    pr.add_argument('--source', choices=sorted(SOURCES), default='')
+    pr.add_argument('--trigger', choices=sorted(TRIGGERS), default='')
+    pr.add_argument('--priority', type=int, choices=(1, 2, 3), default=None)
+    for name in ('prefer', 'fact', 'learn', 'from-journal'):
+        c = sub.choices[name]
+        c.add_argument('--force', action='store_true', help='save even if a highly similar item exists')
+        c.add_argument('--expires', help='YYYY-MM-DD: archive after this day')
+        c.add_argument('--days', type=int, help='archive after N days')
+        c.add_argument('--direct', action='store_true', help='skip the candidate pool (the user confirmed it explicitly)')
+        if name != 'from-journal':
+            c.add_argument('--supersedes', help='ID of the item this new one replaces (kept as superseded)')
+    po = sub.add_parser('pool', help='candidate pool: list, accept or drop')
+    po.add_argument('--accept', help='comma separated IDs the user approved')
+    po.add_argument('--accept-safe', action='store_true', help='accept only the candidates the rules call safe')
+    po.add_argument('--accept-all', action='store_true', help='accept every candidate (only on the user\'s explicit nod)')
+    po.add_argument('--drop', help='comma separated IDs to drop (kept as retired)')
+    po.add_argument('--reason', default='')
+    po.add_argument('--why', default='')
+    po.add_argument('--json', action='store_true')
+    ss = sub.add_parser('supersede', help='old item stays on file as superseded, pointing to the new one')
+    ss.add_argument('--old', required=True)
+    ss.add_argument('--new', required=True)
+    ss.add_argument('--reason', default='')
+    rv = sub.add_parser('review', help='mark items as reviewed (pushes review_by forward)')
+    rv.add_argument('--id', required=True, help='comma separated IDs')
+    rv.add_argument('--days', type=int)
+    rv.add_argument('--why', default='')
+    sub.add_parser('migrate', help='bring items to the current format (idempotent)')
+    for name in ('doctor', 'lint'):
+        d = sub.add_parser(name, help='health check; --fix does only the safe part')
+        d.add_argument('--fix', action='store_true', help='archive expired, merge exact duplicates, fill obvious categories')
+        d.add_argument('--mark-review', action='store_true', help='tag what is left for the user with needs-review')
+        d.add_argument('--json', action='store_true')
+        d.add_argument('--limit', type=int, default=20)
     t = sub.add_parser('temp')
     t.add_argument('--text', required=True)
     t.add_argument('--days', type=int, default=TEMP_DAYS)
@@ -732,6 +1570,7 @@ def main(argv=None):
     sub.add_parser('expire')
     q = sub.add_parser('search')
     q.add_argument('query')
+    q.add_argument('--archived', action='store_true', help='also search archived items')
     sub.add_parser('render')
     sub.add_parser('validate')
     sy = sub.add_parser('sync')
@@ -740,16 +1579,45 @@ def main(argv=None):
     a = ap.parse_args(argv)
     tags = lambda: [x.strip() for x in getattr(a, 'tags', '').split(',') if x.strip()]
     try:
+        if a.command == 'promote':
+            a.command = 'from-journal'
+        exp = expiry(getattr(a, 'expires', None), getattr(a, 'days', None)) if a.command in (
+            'prefer', 'fact', 'learn', 'from-journal') else None
+        force, direct, sup = getattr(a, 'force', False), getattr(a, 'direct', False), getattr(a, 'supersedes', None)
+        ids = lambda v: [x.strip() for x in (v or '').split(',') if x.strip()]
+        if a.command == 'pool':
+            if sum(bool(x) for x in (a.accept, a.accept_safe, a.accept_all)) > 1:
+                raise MemError('pick one of --accept, --accept-safe, --accept-all')
+            rep = pool(a.root, ids(a.accept), a.accept_safe, a.accept_all, ids(a.drop), a.reason, a.why)
+            if a.json:
+                print(json.dumps(rep, ensure_ascii=False, indent=2))
+            else:
+                sys.stdout.write(pool_text(rep))
+            return 0
+        if a.command in ('doctor', 'lint'):
+            rep = doctor(a.root, a.fix, a.mark_review)
+            if a.json:
+                print(json.dumps(rep, ensure_ascii=False, indent=2))
+            else:
+                sys.stdout.write(doctor_text(rep, a.limit))
+            return 0
+        if a.command == 'from-journal':
+            f = {'title': a.title, 'rule': a.rule, 'text': a.text, 'cause': a.cause, 'evidence': a.evidence,
+                 'scope': a.scope, 'tags': tags(), 'category': a.category, 'source': a.source, 'trigger': a.trigger,
+                 'priority': a.priority, 'expires_at': exp, 'id': a.id}
+            result = promote(a.root, a.progress_root, a.project, a.date, a.entry, a.as_kind, f, force, a.why, direct)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 3 if result.get('action') == 'similar_found' else 0
         if a.command == 'brief':
-            sys.stdout.write(brief(a.root, a.project, a.limit, a.full))
+            sys.stdout.write(brief(a.root, a.project, a.limit, a.full, a.superseded))
             return 0
         if a.command == 'prefs':
-            sys.stdout.write(prefs(a.root, a.ids))
+            sys.stdout.write(prefs(a.root, a.ids, a.superseded))
             return 0
         if a.command == 'prefer':
             result = upsert(a.root, 'preference', {'text': a.text, 'source': a.source, 'scope': a.scope, 'priority': a.priority,
                                                    'evidence': a.evidence or '（未注明）', 'tags': tags(),
-                                                   'category': a.category}, a.id, a.why)
+                                                   'category': a.category, 'expires_at': exp}, a.id, a.why, force, direct, sup)
         elif a.command == 'edit':
             updates = {}
             for pair in a.set:
@@ -762,12 +1630,12 @@ def main(argv=None):
             result = merge(a.root, a.src, a.into, a.why)
         elif a.command == 'fact':
             result = upsert(a.root, 'fact', {'text': a.text, 'evidence': a.evidence or '（未注明）', 'tags': tags(),
-                                             'category': a.category}, a.id, a.why)
+                                             'category': a.category, 'expires_at': exp}, a.id, a.why, force, direct, sup)
         elif a.command == 'learn':
             result = upsert(a.root, 'lesson', {'title': a.title, 'rule': a.rule, 'what_happened': a.what, 'cause': a.cause,
                                                'trigger': a.trigger, 'scope': a.scope, 'tags': tags(),
                                                'source_projects': [a.project] if a.project else [],
-                                               'category': a.category}, a.id, a.why)
+                                               'category': a.category, 'expires_at': exp}, a.id, a.why, force, direct, sup)
         elif a.command == 'temp':
             result = add_short_term(a.root, 'temporary', {'text': a.text, 'evidence': a.evidence}, a.days)
         elif a.command == 'focus':
@@ -778,8 +1646,14 @@ def main(argv=None):
             result = retire(a.root, a.id, a.reason)
         elif a.command == 'expire':
             result = expire(a.root)
+        elif a.command == 'supersede':
+            result = supersede(a.root, a.old, a.new, a.reason)
+        elif a.command == 'review':
+            result = review(a.root, ids(a.id), a.days, a.why)
+        elif a.command == 'migrate':
+            result = migrate(a.root)
         elif a.command == 'search':
-            result = search(a.root, a.query)
+            result = search(a.root, a.query, archived=a.archived)
         elif a.command == 'render':
             render(a.root)
             result = {'rendered': list(DERIVED)}
@@ -792,7 +1666,7 @@ def main(argv=None):
             token = token or os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
             result = sync(a.root, a.message, token)
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
+        return 3 if isinstance(result, dict) and result.get('action') == 'similar_found' else 0
     except (MemError, handoff.HandoffError, OSError, ValueError, KeyError, TypeError) as e:
         text = str(e) if isinstance(e, (MemError, handoff.HandoffError)) else type(e).__name__ + ': ' + str(e)[:200]
         print('Memory failed: ' + handoff.SECRET_RE.sub('***', text), file=sys.stderr)
