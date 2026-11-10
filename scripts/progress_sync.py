@@ -47,6 +47,8 @@ SLIM_PATTERNS = ('/*', '!/evidence/', '!/sync-receipts/')  # legacy base (kept f
 RECENT_DAYS_DEFAULT = 3  # slim clone keeps checkpoints from the last N days (+ each project's newest)
 CHECKPOINT_PATH_RE = re.compile(r'^projects/(.+)/checkpoints/(\d{8}T\d{6}Z)-[0-9a-f]+\.json$')
 SLIM_MARK_RE = re.compile(r'recent-days=(\d+)')
+JOURNAL_DAY_RE = re.compile(r'^projects/(.+)/journal/days/(\d{4}-\d{2}-\d{2})\.md$')
+JOURNAL_KEEP_NEWEST = 3  # slim clone always keeps each project's newest N day files, even after a long pause
 
 
 def gitignore_escape(path):
@@ -56,9 +58,10 @@ def gitignore_escape(path):
 def slim_patterns(paths, days=RECENT_DAYS_DEFAULT, now=None):
     """Sparse-checkout (gitignore style) for a slim working tree.
 
-    Excludes: top-level and per-project evidence/ (media), sync-receipts/ (legacy), and checkpoint files
-    older than `days` -- except each project's newest checkpoint, which resume needs. days=0 keeps all
-    checkpoints. Git history is untouched; this only limits what is checked out locally.
+    Excludes: top-level and per-project evidence/ (media), sync-receipts/ (legacy), checkpoint files
+    older than `days` -- except each project's newest checkpoint, which resume needs -- and journal day files
+    older than `days` -- except each project's newest JOURNAL_KEEP_NEWEST; month/year summaries always stay.
+    days=0 keeps all. Git history is untouched; this only limits what is checked out locally.
     """
     patterns = [f'# agent-progress slim recent-days={days}', '/*', '!/evidence/', '!/sync-receipts/',
                 '!/projects/**/evidence/']
@@ -79,6 +82,20 @@ def slim_patterns(paths, days=RECENT_DAYS_DEFAULT, now=None):
             if ts < cutoff and path != newest[project]:
                 patterns.append('!/' + gitignore_escape(path))
                 excluded += 1
+        # journal: old day files drop out (month/year summaries always stay); keep each project's newest few
+        days_by_project = {}
+        for path in paths:
+            m = JOURNAL_DAY_RE.match(path)
+            if m:
+                days_by_project.setdefault(m.group(1), []).append((m.group(2), path))
+        cutoff_day = cutoff.date().isoformat()
+        for project, items in days_by_project.items():
+            items.sort()
+            keep = {p for _, p in items[-JOURNAL_KEEP_NEWEST:]}
+            for day, path in items:
+                if day < cutoff_day and path not in keep:
+                    patterns.append('!/' + gitignore_escape(path))
+                    excluded += 1
     return patterns, excluded
 
 
@@ -964,7 +981,7 @@ def main(argv=None):
     c.add_argument('--dest', type=Path, help='defaults to --root')
     c.add_argument('--depth', type=int)
     c.add_argument('--slim', action='store_true', help='history without old file contents; skip evidence/ and sync-receipts/; keep only recent checkpoints')
-    c.add_argument('--recent-days', type=int, default=RECENT_DAYS_DEFAULT, help='with --slim: checkpoints from the last N days (default 3; 0 = all)')
+    c.add_argument('--recent-days', type=int, default=RECENT_DAYS_DEFAULT, help='with --slim: checkpoints and journal day files from the last N days (default 3; 0 = all)')
     s = sub.add_parser('status')
     s.add_argument('--fetch', action='store_true')
     s.add_argument('--project', action='append')

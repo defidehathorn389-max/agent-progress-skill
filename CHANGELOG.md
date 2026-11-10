@@ -1,5 +1,12 @@
 # 变更记录
 
+## v2.8.0 — 2026-11-10
+
+- 新增 `scripts/journal.py`：分层工作记录。每个工作日一个日记录 `journal/days/YYYY-MM-DD.md`（要点 + 带时间和类型的条目），`rollup` 生成月汇总 `journal/months/YYYY-MM.md` 和年汇总 `journal/years/YYYY.md`（自动明细 + 手写总结，重跑保留手写部分），`recent` 按“本年 → 本月 → 最近 3 天”的接手顺序输出，`check` 列出缺汇总的已结束月份和年份；条目拦截常见秘密格式。
+- progress_sync clone --slim：超过 `--recent-days` 的日记录不检出，但每个项目最新 3 天的日记录和全部月/年汇总始终保留。
+- handoff.py resume 提示最近的工作记录；SKILL.md 新增 §3a。
+- 新增 tests/test_journal.py；全部 113 项测试通过。
+
 ## v2.7.2 — 2026-10-10
 
 - progress_sync clone --slim 默认只检出最近 3 天的 checkpoint（`--recent-days N`，0 = 全部），每个项目的最新 checkpoint 始终保留，项目内 `evidence/` 一并排除；git 历史不变。实测 agent-progress 工作区从 134 MB 降到 4.4 MB。

@@ -948,6 +948,11 @@ def resume_text(root, project):
             + (' ·（合并检查点）' if r['parents'] > 1 else '') for r in recent]
     lines += ['', f"产物 {len(s['artifacts'])} 项、证据 {len(s['evidence'])} 项：见 CURRENT.md；"
                   '本地素材核验用 validate --verify-local。']
+    try:
+        import journal  # layered day/month/year work journal (optional)
+        lines += journal.brief_lines(root, project)
+    except Exception:  # noqa: journal problems never block a resume
+        pass
     lint = lint_state(s)
     if lint:
         lines += ['', '## 提示（不阻断）'] + ['- ' + x for x in lint]
