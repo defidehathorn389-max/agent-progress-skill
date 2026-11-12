@@ -42,7 +42,7 @@ import handoff  # noqa: E402
 
 FORBIDDEN = re.compile(r'(^|/)(\.env[^/]*|\.netrc|\.git-credentials|credentials|\.credentials)(/|$)'
                        r'|\.enc\.json$|\.pem$|\.key$|(^|/)\.write\.lock$|\.tmp$')
-DERIVED = re.compile(r'^(INDEX\.md|projects/[a-z0-9-]+/[a-z0-9-]+/CURRENT\.md)$')
+DERIVED = re.compile(r'^(INDEX\.md|projects/[a-z0-9-]+/[a-z0-9-]+/(CURRENT|PROJECT)\.md)$')
 HEAD_FILE = re.compile(r'^projects/([a-z0-9-]+/[a-z0-9-]+)/HEAD\.json$')
 SLIM_PATTERNS = ('/*', '!/evidence/', '!/sync-receipts/')  # legacy base (kept for reference)
 RECENT_DAYS_DEFAULT = 3  # slim clone keeps checkpoints from the last N days (+ each project's newest)
@@ -288,6 +288,10 @@ def refresh_views(root, projects):
         if not (pdir / 'CURRENT.md').exists() or (pdir / 'CURRENT.md').read_bytes() != data:
             handoff.atomic(pdir / 'CURRENT.md', data)
             changed.append(f'projects/{proj}/CURRENT.md')
+        before = (pdir / 'PROJECT.md').read_bytes() if (pdir / 'PROJECT.md').exists() else None
+        handoff.write_project_doc(pdir)
+        if (pdir / 'PROJECT.md').exists() and (pdir / 'PROJECT.md').read_bytes() != before:
+            changed.append(f'projects/{proj}/PROJECT.md')
     data = handoff.index_bytes(root)
     if not (root / 'INDEX.md').exists() or (root / 'INDEX.md').read_bytes() != data:
         handoff.atomic(root / 'INDEX.md', data)
@@ -460,8 +464,10 @@ def merge_remote(root, git, branch, ident):
             handoff.validate(root, proj)  # merged chain must verify before committing
             _, cp = handoff.checked_head(pdir)
             handoff.atomic(pdir / 'CURRENT.md', handoff.current_bytes(cp))
+            handoff.write_project_doc(pdir)
         handoff.atomic(root / 'INDEX.md', handoff.index_bytes(root))
-        git.run(['add', '--'] + sorted(set(conflicted) | {'INDEX.md'} | {f'projects/{x}/CURRENT.md' for x in touched}), root)
+        git.run(['add', '--'] + sorted(set(conflicted) | {'INDEX.md'} | {f'projects/{x}/CURRENT.md' for x in touched}
+                                       | {f'projects/{x}/PROJECT.md' for x in touched if (handoff.project_dir(root, x) / 'PROJECT.md').exists()}), root)
         git.run(ident + ['commit', '--quiet', '--no-edit'], root)
     except (SyncError, handoff.HandoffError, ValueError, TypeError) as e:
         git.run(['merge', '--abort'], root, check=False)
@@ -499,6 +505,7 @@ def rebase_onto_remote(root, git, branch, ident):
                 _, cp = handoff.checked_head(pdir)
                 handoff.chain(pdir, cp)
                 handoff.atomic(pdir / 'CURRENT.md', handoff.current_bytes(cp))
+                handoff.write_project_doc(pdir)
         handoff.atomic(Path(root) / 'INDEX.md', handoff.index_bytes(root))
         git.run(['add', '--'] + sorted(set(conflicted) | {'INDEX.md'}), root)
         regenerated += conflicted

@@ -535,11 +535,23 @@ def index_bytes(root):
     return ('\n'.join(lines) + '\n').encode()
 
 
+def write_project_doc(p):
+    """Best-effort PROJECT.md card next to CURRENT.md (see project_doc.py). Never fails a write."""
+    try:
+        import project_doc
+        name = Path(p).relative_to(Path(p).parent.parent.parent / 'projects').as_posix()
+        cid, cp = project_doc.head(str(p))
+        atomic(Path(p) / project_doc.FILE, project_doc.render(name, str(p), cid, cp).encode())
+    except Exception:
+        pass
+
+
 def rebuild(root):
     for p in all_projects(root):
         _, cp = checked_head(p)
         chain(p, cp)
         atomic(p / 'CURRENT.md', current_bytes(cp))
+        write_project_doc(p)
     atomic(Path(root) / 'INDEX.md', index_bytes(root))
 
 
@@ -602,6 +614,7 @@ def checkpoint(root, project, state, expected, note, merge_parent=None):
         atomic(p / 'HEAD.json', dump(h))
         # Render from the re-parsed bytes so the view never depends on caller key order.
         atomic(p / 'CURRENT.md', current_bytes(json.loads(data)))
+        write_project_doc(p)
         atomic(Path(root) / 'INDEX.md', index_bytes(root))
         return h
     finally:

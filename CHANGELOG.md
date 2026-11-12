@@ -1,5 +1,11 @@
 # 变更记录
 
+## v2.12.0 — 2026-11-12
+
+- 新增 `scripts/project_doc.py`：每个项目一份 `PROJECT.md` 短卡片，统一五栏（最后更新、现状、入口文件、下一步、注意事项），没内容写「无」。「最后更新」取 HEAD 检查点和最新日记录中较新的日期。命令 `build [--project]`、`check`（缺失或落后于 HEAD 时退出 1）、`index`。
+- handoff.py 写检查点、`rebuild` 时顺带刷新 PROJECT.md（失败不影响写入）；progress_sync.py 把 PROJECT.md 当派生视图，冲突时重新生成。
+- 新增 tests/test_project_doc.py。
+
 ## v2.11.0 — 2026-11-10
 
 - 默认路径改为当前用户主目录：memory.py、handoff.py、skills.py、progress_sync.py、workspace.py、export_handoff.py、credential_vault.py 不再默认 `/home/user/...`，改用 `Path.home()`；`AGENT_*_ROOT` / `AGENT_WORKSPACE_HOME` 环境变量和 `--root` 参数照旧可覆盖。文档里的示例路径同步改成 `~/...`。
