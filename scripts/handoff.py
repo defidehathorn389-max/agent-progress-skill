@@ -352,7 +352,9 @@ def walk_chain(p, head_cp, deep=False, allow_missing=False):
                         missing.append(qid)
                     continue
                 raise HandoffError('Missing parent checkpoint ' + qid + ': restore the full chain from the same '
-                                   'remote commit (a normal git clone has it); do not treat as remote loss')
+                                   'remote commit (a normal git clone has it); do not treat as remote loss. '
+                                   'In a slim clone (older checkpoints not checked out) run: progress_sync.py '
+                                   'clone --repo OWNER/agent-progress --slim --recent-days 0 (re-uses the clone, seconds)')
             data = path.read_bytes()
             if digest(data) != q.get('sha256'):
                 raise HandoffError('Parent checkpoint hash mismatch')

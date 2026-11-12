@@ -92,6 +92,7 @@ python3 $S/memory.py session --summary '本次对话做了什么' --open '没做
 - `journal/years/YYYY.md`：`journal.py rollup --year YYYY` 汇集各月总结，再手写年度总结。
 - 时机：有实质进展的那一轮结束前写日记录（和检查点一起推送：`save`/`push --project` 会带上整个项目目录）；进入新的月份时先把上个月汇总写完，新的一年同理。`journal.py check` 列出缺的汇总。
 - 时区：`--tz` 或环境变量 `AGENT_TZ`（用用户所在时区）。条目和检查点一样不写秘密，工具会拦截常见格式。
+- slim 克隆只检出最近 3 天的检查点（每个项目的最新一个总在）：要 `state`/`update`/`save` 一个 3 天前没动过的项目会报 Missing parent checkpoint，先跑 `progress_sync.py clone --repo defidehathorn389-max/agent-progress --slim --recent-days 0`（复用现有克隆，几秒）。
 - slim 克隆：超过 `--recent-days`（默认 3）天的日记录不检出，但每个项目最新 3 天的日记录和全部月/年汇总始终保留，所以长时间没干活后接手也能看到最后几天。
 
 ## 4. 状态怎么写
